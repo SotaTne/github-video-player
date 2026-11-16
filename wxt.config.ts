@@ -5,9 +5,9 @@ export default defineConfig({
   srcDir: 'src',
   modules: ['@wxt-dev/module-solid'],
   manifest: {
-    name: 'GitHub Video Player',
-    description:
-      'Play video files (.mp4, .webm, .mov, etc.) directly on GitHub blob pages and PR/Commit diffs.',
+    default_locale: 'ja',
+    name: '__MSG_extName__',
+    description: '__MSG_extDescription__',
     version: '1.0.0',
     web_accessible_resources: [
       {

@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "GitHub Video Player",
+    "description": "拡張機能の名称"
+  },
+  "extDescription": {
+    "message": "GitHub のファイル（Blob）画面や Pull Request・Commit の差分画面で、動画ファイル（.mp4, .webm, .mov 等）をブラウザ内で直接再生します。",
+    "description": "拡張機能の説明文（chrome://extensions および Chrome ウェブストア表示用）"
+  }
+}
