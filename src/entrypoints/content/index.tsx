@@ -1,4 +1,49 @@
+import './style.css';
+import { detectVideoTargets, polishMountedDiffContainers } from '../../features/github-detector';
+import { mountTargetWithShadowUi } from './mount';
+
 export default defineContentScript({
   matches: ['*://github.com/*'],
-  main() {},
+  cssInjectionMode: 'ui',
+
+  main(ctx) {
+    let scanTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scanAndMount = () => {
+      polishMountedDiffContainers(document);
+      const targets = detectVideoTargets(document, window.location.href);
+      for (const target of targets) {
+        void mountTargetWithShadowUi(ctx, target);
+      }
+    };
+
+    // 連続的な DOM 更新やスクロール中でも 100ms 以内にスキャンが実行されるようスロットル制御する
+    const scheduleScan = () => {
+      if (scanTimer !== null) return;
+      scanTimer = setTimeout(() => {
+        scanTimer = null;
+        scanAndMount();
+      }, 100);
+    };
+
+    scanAndMount();
+
+    ctx.addEventListener(window, 'wxt:locationchange', scheduleScan);
+    ctx.addEventListener(document, 'turbo:render' as keyof DocumentEventMap, scheduleScan);
+
+    // Turbo による <body> 差し替え後でも監視が途切れないよう documentElement を監視する
+    const observer = new MutationObserver(scheduleScan);
+    const observeTarget = document.documentElement ?? document.body;
+    if (observeTarget) {
+      observer.observe(observeTarget, {
+        childList: true,
+        subtree: true,
+      });
+    }
+
+    ctx.onInvalidated(() => {
+      observer.disconnect();
+      if (scanTimer) clearTimeout(scanTimer);
+    });
+  },
 });

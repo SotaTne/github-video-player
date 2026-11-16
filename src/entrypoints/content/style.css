@@ -1,0 +1,25 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-gh-canvas: var(--bgColor-default, #0d1117);
+  --color-gh-muted: var(--bgColor-muted, #161b22);
+  --color-gh-border: var(--borderColor-default, #30363d);
+  --color-gh-fg: var(--fgColor-default, #e6edf3);
+  --color-gh-fg-muted: var(--fgColor-muted, #8b949e);
+  --color-gh-accent: var(--fgColor-accent, #58a6ff);
+  --color-gh-accent-bg: var(--bgColor-accent-emphasis, #1f6feb);
+  --color-gh-accent-subtle: var(--bgColor-accent-muted, rgba(56, 139, 253, 0.15));
+  --color-gh-success: var(--fgColor-success, #3fb950);
+  --color-gh-success-subtle: var(--bgColor-success-muted, rgba(46, 160, 67, 0.15));
+  --color-gh-danger: var(--fgColor-danger, #f85149);
+  --color-gh-danger-subtle: var(--bgColor-danger-muted, rgba(248, 81, 73, 0.15));
+}
+
+:host {
+  display: block;
+  width: 100%;
+}
+
+.ghvp-media-box {
+  aspect-ratio: var(--ghvp-aspect, 16 / 9);
+}
