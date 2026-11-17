@@ -538,4 +538,28 @@ describe('github-detector', () => {
     expect(secondTargets).toHaveLength(1);
     expect(secondTargets[0]!.rawUrl).toBe('https://github.com/octocat/hello/raw/main/second.mp4');
   });
+
+  it('omits beforeRawUrl for added files marked by aria-label or non-code success diffstat', () => {
+    document.body.innerHTML = `
+      <input type="hidden" name="comparison_start_oid" value="basesha" />
+      <input type="hidden" name="comparison_end_oid" value="headsha" />
+      <div class="diff__GZFl4M" id="diff-added-1">
+        <div data-diff-header-wrapper="true">
+          <span aria-label="added" class="fgColor-success">BIN</span>
+          <h3><a href="#diff-added-1"><code>e2e/new-only.webm</code></a></h3>
+        </div>
+        <div data-diff-anchor="diff-added-1">Binary file not shown.</div>
+      </div>
+    `;
+
+    const targets = detectVideoTargets(
+      document,
+      'https://github.com/octocat/hello/pull/12/changes',
+    );
+    expect(targets).toHaveLength(1);
+    expect(targets[0]!.rawUrl).toBe(
+      'https://github.com/octocat/hello/raw/headsha/e2e/new-only.webm',
+    );
+    expect(targets[0]!.beforeRawUrl).toBeUndefined();
+  });
 });
