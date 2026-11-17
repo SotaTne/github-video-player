@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { fireEvent } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 import {
   createGitHubBlobDom,
   createGitHubPrDiffDom,
@@ -226,6 +227,7 @@ describe('github-detector', () => {
       expect(splitButton?.textContent).toBe('並列比較 (Split)');
 
       fireEvent.click(splitButton!);
+      flush();
 
       const beforeVideo = document.querySelector('[data-testid="ghvp-video-before"]');
       const afterVideo = document.querySelector('[data-testid="ghvp-video-after"]');

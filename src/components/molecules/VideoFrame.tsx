@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, onCleanup, Show } from 'solid-js';
+import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import { getVideoMimeType } from '../../features/github-detector';
 import { Badge } from '../atoms/Badge';
 import { ExternalLink } from '../atoms/ExternalLink';
@@ -52,9 +52,9 @@ export function VideoFrame(props: VideoFrameProps) {
 
   const [metadata, setMetadata] = createSignal<VideoMetadata | null>(null);
   const [hasError, setHasError] = createSignal(false);
-  const [frameReady, setFrameReady] = createSignal(false);
 
   let iframeRef: HTMLIFrameElement | undefined;
+  let isFrameReady = false;
   let pendingPayload: { buffer: ArrayBuffer; mimeType: string } | null = null;
 
   const handleError = () => {
@@ -77,29 +77,15 @@ export function VideoFrame(props: VideoFrameProps) {
     );
   };
 
-  createEffect(
-    on(
-      () => props.src,
-      () => {
-        setMetadata(null);
-        setHasError(false);
-        pendingPayload = null;
-      },
-      { defer: true },
-    ),
-  );
-
   // 拡張機能内 iframe からの準備完了・メタデータ・エラー通知を受信する
-  createEffect(() => {
-    if (!extensionOrigin) return;
-
+  if (extensionOrigin) {
     const handleMessage = (event: MessageEvent) => {
       if (event.origin !== extensionOrigin) return;
       const data = event.data as Record<string, unknown> | null;
       if (!data || data['frameId'] !== frameId) return;
 
       if (data['type'] === 'ghvp:frame-ready') {
-        setFrameReady(true);
+        isFrameReady = true;
         if (pendingPayload) {
           const payload = pendingPayload;
           pendingPayload = null;
@@ -126,47 +112,49 @@ export function VideoFrame(props: VideoFrameProps) {
     onCleanup(() => {
       window.removeEventListener('message', handleMessage);
     });
-  });
+  }
 
   // Content Script 側のセッション Cookie 付き fetch で動画バイト列を取得し、iframe へ転送する
-  createEffect(() => {
-    if (!extensionFrameUrl) return;
-    const src = props.src;
+  createEffect(
+    () => (extensionFrameUrl ? props.src : null),
+    (src) => {
+      if (!src) return;
 
-    const controller = new AbortController();
-    pendingPayload = null;
-    setMetadata(null);
-    setHasError(false);
+      const controller = new AbortController();
+      pendingPayload = null;
+      setMetadata(null);
+      setHasError(false);
 
-    void (async () => {
-      try {
-        const response = await fetch(src, {
-          credentials: 'same-origin',
-          signal: controller.signal,
-        });
-        if (!response.ok) {
+      void (async () => {
+        try {
+          const response = await fetch(src, {
+            credentials: 'same-origin',
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            handleError();
+            return;
+          }
+          const buffer = await response.arrayBuffer();
+          if (controller.signal.aborted) return;
+
+          const payload = { buffer, mimeType: getVideoMimeType(src) };
+          if (isFrameReady && iframeRef?.contentWindow) {
+            postVideoToFrame(payload);
+          } else {
+            pendingPayload = payload;
+          }
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
           handleError();
-          return;
         }
-        const buffer = await response.arrayBuffer();
-        if (controller.signal.aborted) return;
+      })();
 
-        const payload = { buffer, mimeType: getVideoMimeType(src) };
-        if (frameReady() && iframeRef?.contentWindow) {
-          postVideoToFrame(payload);
-        } else {
-          pendingPayload = payload;
-        }
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        handleError();
-      }
-    })();
-
-    onCleanup(() => {
-      controller.abort();
-    });
-  });
+      return () => {
+        controller.abort();
+      };
+    },
+  );
 
   const handleLoadedMetadata = (e: Event) => {
     const video = e.currentTarget as HTMLVideoElement;

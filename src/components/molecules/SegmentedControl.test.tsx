@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@solidjs/testing-library';
-import { createSignal } from 'solid-js';
+import { createSignal, flush } from 'solid-js';
 import { SegmentedControl } from './SegmentedControl';
 
 describe('SegmentedControl', () => {
@@ -48,6 +48,7 @@ describe('SegmentedControl', () => {
 
     const splitBtn = getByRole('button', { name: '並列比較 (Split)' });
     fireEvent.click(splitBtn);
+    flush();
 
     expect(onChange).toHaveBeenCalledWith('split');
     expect(splitBtn.getAttribute('aria-pressed')).toBe('true');

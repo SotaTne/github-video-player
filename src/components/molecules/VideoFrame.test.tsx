@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 import { VideoFrame } from './VideoFrame';
 
 describe('VideoFrame', () => {
@@ -45,6 +46,7 @@ describe('VideoFrame', () => {
     Object.defineProperty(video, 'duration', { value: 65, configurable: true });
 
     fireEvent(video, new Event('loadedmetadata'));
+    flush();
 
     expect(queryByTestId('ghvp-metadata')).toBeNull();
     expect(video.getAttribute('width')).toBe('1920');
@@ -62,6 +64,7 @@ describe('VideoFrame', () => {
     ));
 
     fireEvent(getByTestId('video-broken'), new Event('error'));
+    flush();
 
     expect(onUnavailable).toHaveBeenCalledTimes(1);
     expect(queryByTestId('video-broken')).toBeNull();

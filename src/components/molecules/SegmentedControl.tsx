@@ -28,7 +28,7 @@ export function SegmentedControl<T extends string>(props: SegmentedControlProps<
           return (
             <button
               type="button"
-              aria-pressed={isSelected()}
+              aria-pressed={isSelected() ? 'true' : 'false'}
               onClick={() => props.onChange(option.value)}
               class={`px-2.5 py-1 min-h-6 text-xs cursor-pointer transition-colors ${
                 isSelected()
