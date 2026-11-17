@@ -1,8 +1,7 @@
 interface LoadVideoMessage {
   type: 'ghvp:load-video';
   frameId: string;
-  buffer: ArrayBuffer;
-  mimeType: string;
+  blob: Blob;
 }
 
 const params = new URLSearchParams(window.location.search);
@@ -24,8 +23,7 @@ function isLoadVideoMessage(data: unknown): data is LoadVideoMessage {
   return (
     candidate.type === 'ghvp:load-video' &&
     candidate.frameId === frameId &&
-    candidate.buffer instanceof ArrayBuffer &&
-    typeof candidate.mimeType === 'string'
+    candidate.blob instanceof Blob
   );
 }
 
@@ -56,8 +54,7 @@ window.addEventListener('message', (event) => {
   }
 
   revokeCurrentUrl();
-  const blob = new Blob([event.data.buffer], { type: event.data.mimeType });
-  currentObjectUrl = URL.createObjectURL(blob);
+  currentObjectUrl = URL.createObjectURL(event.data.blob);
   player.src = currentObjectUrl;
 });
 

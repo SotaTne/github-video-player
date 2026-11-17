@@ -71,7 +71,7 @@ describe('VideoFrame', () => {
     expect(getByTestId('ghvp-error')).toBeTruthy();
   });
 
-  it('uses isolated extension iframe even in lazy diff mode and updates aspect ratio via postMessage', async () => {
+  it('uses isolated extension iframe even in lazy diff mode and passes Blob via postMessage', async () => {
     const extensionOrigin = 'chrome-extension://test-extension-id';
     const originalChrome = (globalThis as { chrome?: unknown }).chrome;
     const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
@@ -127,12 +127,15 @@ describe('VideoFrame', () => {
           expect.objectContaining({
             type: 'ghvp:load-video',
             frameId,
-            mimeType: 'video/webm',
+            blob: expect.any(Blob),
           }),
           extensionOrigin,
-          expect.any(Array),
         );
       });
+
+      const postedMessage = postMessageSpy.mock.calls[0]?.[0] as { blob: Blob };
+      expect(postedMessage.blob.type).toBe('video/webm');
+      expect(postedMessage.blob.size).toBe(4);
 
       window.dispatchEvent(
         new MessageEvent('message', {
