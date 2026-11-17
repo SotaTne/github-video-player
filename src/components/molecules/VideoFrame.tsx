@@ -14,6 +14,8 @@ export interface VideoFrameProps {
   labelVariant?: 'danger' | 'success';
   lazy?: boolean;
   testId?: string;
+  initialBlob?: Blob;
+  onBlobLoaded?: (blob: Blob) => void;
   onUnavailable?: () => void;
 }
 
@@ -171,6 +173,14 @@ export function VideoFrame(props: VideoFrameProps) {
       setMetadata(null);
       setHasError(false);
 
+      if (props.initialBlob && props.initialBlob.size > 0) {
+        latestBlob = props.initialBlob;
+        if (isFrameReady && iframeRef?.contentWindow) {
+          postVideoToFrame(props.initialBlob);
+        }
+        return;
+      }
+
       void (async () => {
         try {
           const response = await fetch(src, {
@@ -193,6 +203,7 @@ export function VideoFrame(props: VideoFrameProps) {
             ? rawBlob
             : rawBlob.slice(0, rawBlob.size, mimeType);
           latestBlob = blob;
+          props.onBlobLoaded?.(blob);
           if (isFrameReady && iframeRef?.contentWindow) {
             postVideoToFrame(blob);
           }
