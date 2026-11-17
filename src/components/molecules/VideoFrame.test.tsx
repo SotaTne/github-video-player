@@ -1002,4 +1002,78 @@ describe('VideoFrame', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('restores saved playback position across unmount and remount for the same src', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() =>
+        Promise.resolve(new Response(sampleBytes.slice(0), { status: 200 })),
+      );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const targetSrc = 'https://github.com/octocat/hello/raw/develop/virtualized-remount.mp4';
+      const firstMount = render(() => <VideoFrame src={targetSrc} testId="video-remount-1" />);
+
+      const firstIframe = firstMount.getByTestId('video-remount-1') as HTMLIFrameElement;
+      const firstFrameId =
+        new URL(firstIframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: {
+            type: 'ghvp:playback-state',
+            frameId: firstFrameId,
+            playing: false,
+            currentTime: 12.5,
+          },
+        }),
+      );
+
+      // GitHub の仮想スクロール等で DOM ごとアンマウントされる
+      firstMount.unmount();
+
+      // 同じ src で再マウントされる
+      const secondMount = render(() => <VideoFrame src={targetSrc} testId="video-remount-2" />);
+      const secondIframe = secondMount.getByTestId('video-remount-2') as HTMLIFrameElement;
+      const secondFrameId =
+        new URL(secondIframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+      const secondPostSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(secondIframe, 'contentWindow', {
+        value: { postMessage: secondPostSpy },
+        configurable: true,
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId: secondFrameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(secondPostSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'ghvp:load-video',
+            frameId: secondFrameId,
+            initialTime: 12.5,
+          }),
+          extensionOrigin,
+        );
+      });
+    } finally {
+      fetchSpy.mockRestore();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
 });

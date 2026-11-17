@@ -4,6 +4,7 @@ interface LoadVideoMessage {
   type: 'ghvp:load-video';
   frameId: string;
   blob: Blob;
+  initialTime?: number;
 }
 
 interface InitStreamMessage {
@@ -12,6 +13,7 @@ interface InitStreamMessage {
   streamId: string;
   totalSize: number;
   contentType: string;
+  initialTime?: number;
 }
 
 const params = new URLSearchParams(window.location.search);
@@ -20,6 +22,7 @@ const player = document.getElementById('player') as HTMLVideoElement | null;
 
 let currentObjectUrl: string | null = null;
 let activeStreamId: string | null = null;
+let pendingInitialTime = 0;
 
 function revokeCurrentUrl(): void {
   if (currentObjectUrl) {
@@ -112,6 +115,15 @@ function registerStreamWithWorker(
 
 if (player) {
   player.addEventListener('loadedmetadata', () => {
+    if (
+      pendingInitialTime > 0 &&
+      Number.isFinite(player.duration) &&
+      pendingInitialTime < player.duration
+    ) {
+      player.currentTime = pendingInitialTime;
+    }
+    pendingInitialTime = 0;
+
     window.parent.postMessage(
       {
         type: 'ghvp:video-metadata',
@@ -135,22 +147,30 @@ if (player) {
     window.parent.postMessage({ type: 'ghvp:video-error', frameId }, '*');
   });
 
-  const notifyPlaybackState = () => {
+  let lastTimeSyncAt = 0;
+  const notifyPlaybackState = (ended = false) => {
     window.parent.postMessage(
       {
         type: 'ghvp:playback-state',
         frameId,
         playing: !player.paused && !player.ended,
-        currentTime: player.currentTime,
+        currentTime: ended ? 0 : player.currentTime,
+        ended,
       },
       '*',
     );
   };
 
-  player.addEventListener('play', notifyPlaybackState);
-  player.addEventListener('pause', notifyPlaybackState);
-  player.addEventListener('ended', notifyPlaybackState);
-  player.addEventListener('seeked', notifyPlaybackState);
+  player.addEventListener('play', () => notifyPlaybackState(false));
+  player.addEventListener('pause', () => notifyPlaybackState(false));
+  player.addEventListener('ended', () => notifyPlaybackState(true));
+  player.addEventListener('seeked', () => notifyPlaybackState(false));
+  player.addEventListener('timeupdate', () => {
+    const now = Date.now();
+    if (now - lastTimeSyncAt < 500) return;
+    lastTimeSyncAt = now;
+    notifyPlaybackState(false);
+  });
 }
 
 window.addEventListener('message', (event) => {
@@ -181,6 +201,10 @@ window.addEventListener('message', (event) => {
       }
 
       activeStreamId = event.data.streamId;
+      pendingInitialTime =
+        typeof event.data.initialTime === 'number' && event.data.initialTime > 0
+          ? event.data.initialTime
+          : 0;
       player.src = `${STREAM_PATH_PREFIX}${encodeURIComponent(event.data.streamId)}`;
       player.load();
     })();
@@ -196,6 +220,10 @@ window.addEventListener('message', (event) => {
 
   unregisterCurrentStream();
   revokeCurrentUrl();
+  pendingInitialTime =
+    typeof event.data.initialTime === 'number' && event.data.initialTime > 0
+      ? event.data.initialTime
+      : 0;
   currentObjectUrl = URL.createObjectURL(event.data.blob);
   player.src = currentObjectUrl;
   player.load();
