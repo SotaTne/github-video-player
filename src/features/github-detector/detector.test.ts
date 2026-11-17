@@ -7,7 +7,7 @@ import {
   mountPlayerForTest,
   toGitHubPageHtml,
 } from '../../../test/github-fixtures';
-import { detectVideoTargets, polishMountedDiffContainers } from './index';
+import { detectVideoTargets, markMounted, polishMountedDiffContainers } from './index';
 
 describe('github-detector', () => {
   beforeEach(() => {
@@ -419,5 +419,38 @@ describe('github-detector', () => {
     } finally {
       jsonParseSpy.mockRestore();
     }
+  });
+
+  it('redetects a diff container when its mounted player host is removed by DOM rerender', () => {
+    document.body.innerHTML = createGitHubPrDiffDom({
+      baseSha: 'base',
+      headSha: 'head',
+      variant: 'react',
+      files: [{ path: 'e2e/rerendered.webm', status: 'added' }],
+    });
+
+    const initialTargets = detectVideoTargets(
+      document,
+      'https://github.com/octocat/hello/pull/12/changes',
+    );
+    expect(initialTargets).toHaveLength(1);
+
+    const container = initialTargets[0]!.container;
+    markMounted(container);
+    const host = document.createElement('github-video-player');
+    container.appendChild(host);
+
+    // ホストが存在する間は再検出しない
+    expect(
+      detectVideoTargets(document, 'https://github.com/octocat/hello/pull/12/changes'),
+    ).toHaveLength(0);
+
+    // GitHub の再描画でホスト要素だけが消された場合は再検出できること
+    host.remove();
+    const redetectedTargets = detectVideoTargets(
+      document,
+      'https://github.com/octocat/hello/pull/12/changes',
+    );
+    expect(redetectedTargets).toHaveLength(1);
   });
 });

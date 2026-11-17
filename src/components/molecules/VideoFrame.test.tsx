@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@solidjs/testing-library';
-import { flush } from 'solid-js';
+import { createSignal, flush } from 'solid-js';
 import { VideoFrame } from './VideoFrame';
 
 describe('VideoFrame', () => {
@@ -251,6 +251,198 @@ describe('VideoFrame', () => {
     } finally {
       fetchSpy.mockRestore();
       vi.unstubAllGlobals();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('resends the fetched Blob when iframe reloads and emits ghvp:frame-ready again', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(sampleBytes, { status: 200 }));
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/reload.webm"
+          testId="video-iframe-reload"
+        />
+      ));
+
+      const iframe = getByTestId('video-iframe-reload') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+      const postMessageSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage: postMessageSpy },
+        configurable: true,
+      });
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+      });
+
+      // 1回目の frame-ready で初回 Blob を送信
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledTimes(1);
+      });
+
+      // DOM 移動等で iframe が再ロードされ、2回目の frame-ready が届いた場合でも再送されること
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      fetchSpy.mockRestore();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('resets iframe readiness after error recovery so a new src waits for new frame-ready', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() => Promise.resolve(new Response(sampleBytes, { status: 200 })));
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const [src, setSrc] = createSignal('https://github.com/octocat/hello/raw/main/first.webm');
+      const { getByTestId } = render(() => (
+        <VideoFrame src={src()} testId="video-iframe-recover" />
+      ));
+
+      const firstIframe = getByTestId('video-iframe-recover') as HTMLIFrameElement;
+      const frameId =
+        new URL(firstIframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+      const firstPostSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(firstIframe, 'contentWindow', {
+        value: { postMessage: firstPostSpy },
+        configurable: true,
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+      await waitFor(() => {
+        expect(firstPostSpy).toHaveBeenCalledTimes(1);
+      });
+
+      // 一度動画エラーになって iframe がアンマウントされる
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:video-error', frameId },
+        }),
+      );
+      await waitFor(() => {
+        expect(getByTestId('ghvp-error')).toBeTruthy();
+      });
+
+      // src が切り替わって新しい iframe がマウントされた直後（まだ frame-ready 前）
+      setSrc('https://github.com/octocat/hello/raw/main/second.webm');
+      flush();
+
+      const secondIframe = getByTestId('video-iframe-recover') as HTMLIFrameElement;
+      const secondPostSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(secondIframe, 'contentWindow', {
+        value: { postMessage: secondPostSpy },
+        configurable: true,
+      });
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // 新しい iframe から frame-ready が来る前に postMessage されていてはいけない
+      expect(secondPostSpy).not.toHaveBeenCalled();
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(secondPostSpy).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      fetchSpy.mockRestore();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('falls back to error state when fetch returns an empty or HTML response', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('<html><body>Login</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/login-redirect.mp4"
+          testId="video-iframe-html"
+        />
+      ));
+
+      const iframe = getByTestId('video-iframe-html') as HTMLIFrameElement;
+      const postMessageSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage: postMessageSpy },
+        configurable: true,
+      });
+
+      await waitFor(() => {
+        expect(getByTestId('ghvp-error')).toBeTruthy();
+      });
+      expect(postMessageSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });

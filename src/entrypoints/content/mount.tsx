@@ -4,6 +4,8 @@ import type { ContentScriptContext } from 'wxt/utils/content-script-context';
 import {
   isUnmounted,
   markMounted,
+  markMounting,
+  MOUNTED_ATTR,
   polishGitHubBlobPage,
   polishGitHubDiffContainer,
   type VideoMountTarget,
@@ -32,7 +34,7 @@ export async function mountTargetWithShadowUi(
   target: VideoMountTarget,
 ): Promise<void> {
   if (!isUnmounted(target.container)) return;
-  markMounted(target.container);
+  markMounting(target.container);
 
   if (target.type === 'blob') {
     polishGitHubBlobPage(document, target.container);
@@ -53,7 +55,13 @@ export async function mountTargetWithShadowUi(
     },
   });
 
+  if (!target.container.isConnected) {
+    target.container.removeAttribute(MOUNTED_ATTR);
+    return;
+  }
+
   ui.mount();
+  markMounted(target.container);
 
   // 非同期のマウント待機中に挿入されたテキストや翻訳要素を再度除去する
   if (target.type === 'diff') {
