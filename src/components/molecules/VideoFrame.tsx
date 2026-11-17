@@ -39,15 +39,19 @@ interface StreamInfo {
 }
 
 function getExtensionFrameUrl(frameId: string): string | null {
-  const g = globalThis as {
-    browser?: { runtime?: ExtensionRuntimeLike };
-    chrome?: { runtime?: ExtensionRuntimeLike };
-  };
-  const runtime = g.browser?.runtime?.id ? g.browser.runtime : g.chrome?.runtime;
-  if (!runtime?.id || typeof runtime.getURL !== 'function') {
+  try {
+    const g = globalThis as {
+      browser?: { runtime?: ExtensionRuntimeLike };
+      chrome?: { runtime?: ExtensionRuntimeLike };
+    };
+    const runtime = g.browser?.runtime?.id ? g.browser.runtime : g.chrome?.runtime;
+    if (!runtime?.id || typeof runtime.getURL !== 'function') {
+      return null;
+    }
+    return runtime.getURL(`/video-frame.html?frameId=${encodeURIComponent(frameId)}`);
+  } catch {
     return null;
   }
-  return runtime.getURL(`/video-frame.html?frameId=${encodeURIComponent(frameId)}`);
 }
 
 function resolveOrigin(urlStr: string): string {

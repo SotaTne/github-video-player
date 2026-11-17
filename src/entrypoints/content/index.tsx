@@ -16,13 +16,14 @@ export default defineContentScript({
     let isScanning = false;
 
     const scanAndMount = () => {
-      if (!isSupportedGitHubVideoPage(window.location.href)) return;
+      if (ctx.isInvalid || !isSupportedGitHubVideoPage(window.location.href)) return;
 
       isScanning = true;
       try {
         polishMountedDiffContainers(document);
         const targets = detectVideoTargets(document, window.location.href);
         for (const target of targets) {
+          if (ctx.isInvalid) break;
           void mountTargetWithShadowUi(ctx, target);
         }
       } finally {
@@ -32,7 +33,12 @@ export default defineContentScript({
 
     // 連続的な DOM 更新やスクロール中でも 100ms 以内にスキャンが実行されるようスロットル制御する
     const scheduleScan = () => {
-      if (isScanning || scanTimer !== null || !isSupportedGitHubVideoPage(window.location.href)) {
+      if (
+        ctx.isInvalid ||
+        isScanning ||
+        scanTimer !== null ||
+        !isSupportedGitHubVideoPage(window.location.href)
+      ) {
         return;
       }
       scanTimer = setTimeout(() => {
