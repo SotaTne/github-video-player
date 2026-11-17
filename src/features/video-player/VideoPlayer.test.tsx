@@ -23,8 +23,8 @@ describe('VideoPlayer', () => {
     expect(video.hasAttribute('loading')).toBe(false);
   });
 
-  it('switches between After, Before, and Split comparison views in diff mode', () => {
-    const { getByRole, getByTestId, queryByTestId } = render(() => (
+  it('switches between After, Before, and 2-Side comparison views in diff mode without duplicate badges', () => {
+    const { getByRole, getByTestId, queryByTestId, getAllByText } = render(() => (
       <VideoPlayer
         filePath="assets/demo.mp4"
         rawUrl="https://github.com/octocat/hello/raw/head/assets/demo.mp4"
@@ -33,25 +33,30 @@ describe('VideoPlayer', () => {
       />
     ));
 
-    // 初期状態では変更後 (After) のみが loading="lazy" で描画される
+    // 初期状態では After のみが表示され、二重ラベルは出ない
     const afterVideo = getByTestId('ghvp-video-after');
     expect(afterVideo.getAttribute('loading')).toBe('lazy');
+    expect(afterVideo.closest('[aria-hidden="true"]')).toBeNull();
     expect(queryByTestId('ghvp-video-before')).toBeNull();
+    expect(getAllByText('After')).toHaveLength(1);
 
-    // 変更前 (Before) に切り替える
-    fireEvent.click(getByRole('button', { name: '変更前 (Before)' }));
+    // Before に切り替えると After は DOM 上に保持したまま非表示になり、Before にも二重ラベルを出さない
+    fireEvent.click(getByRole('button', { name: 'Before' }));
     flush();
     expect(getByTestId('ghvp-video-before').getAttribute('loading')).toBe('lazy');
-    expect(queryByTestId('ghvp-video-after')).toBeNull();
+    expect(getByTestId('ghvp-video-after').closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(getAllByText('Before')).toHaveLength(1);
 
-    // 並列比較 (Split) に切り替える
-    fireEvent.click(getByRole('button', { name: '並列比較 (Split)' }));
+    // 2-Side に切り替えると両方が表示され、それぞれに Before / After ラベルが付く
+    fireEvent.click(getByRole('button', { name: '2-Side' }));
     flush();
     expect(getByTestId('ghvp-video-before')).toBeTruthy();
-    expect(getByTestId('ghvp-video-after')).toBeTruthy();
+    expect(getByTestId('ghvp-video-after').closest('[aria-hidden="true"]')).toBeNull();
+    expect(getAllByText('Before')).toHaveLength(2);
+    expect(getAllByText('After')).toHaveLength(2);
   });
 
-  it('updates dimensions independently for Before and After videos in Split view', () => {
+  it('updates dimensions independently for Before and After videos in 2-Side view', () => {
     const { getByRole, getByTestId, queryAllByTestId } = render(() => (
       <VideoPlayer
         filePath="assets/demo.mp4"
@@ -61,7 +66,7 @@ describe('VideoPlayer', () => {
       />
     ));
 
-    fireEvent.click(getByRole('button', { name: '並列比較 (Split)' }));
+    fireEvent.click(getByRole('button', { name: '2-Side' }));
     flush();
 
     const beforeVideo = getByTestId('ghvp-video-before') as HTMLVideoElement;
@@ -85,7 +90,7 @@ describe('VideoPlayer', () => {
     expect(queryAllByTestId('ghvp-metadata')).toHaveLength(0);
   });
 
-  it('falls back to After view and hides comparison controls when Before fails to load', () => {
+  it('falls back to After view without unmounting or re-fetching After when Before fails to load', () => {
     const { getByRole, getByTestId, queryByRole } = render(() => (
       <VideoPlayer
         filePath="assets/demo.mp4"
@@ -95,13 +100,17 @@ describe('VideoPlayer', () => {
       />
     ));
 
-    fireEvent.click(getByRole('button', { name: '変更前 (Before)' }));
+    const initialAfterEl = getByTestId('ghvp-video-after');
+
+    fireEvent.click(getByRole('button', { name: 'Before' }));
     flush();
     fireEvent(getByTestId('ghvp-video-before'), new Event('error'));
     flush();
 
     expect(queryByRole('group', { name: '動画の比較表示モード' })).toBeNull();
-    expect(getByTestId('ghvp-video-after')).toBeTruthy();
+    const afterElAfterFallback = getByTestId('ghvp-video-after');
+    expect(afterElAfterFallback).toBe(initialAfterEl);
+    expect(afterElAfterFallback.closest('[aria-hidden="true"]')).toBeNull();
   });
 
   it('reuses fetched Blob across After/Before tab switches without re-fetching', async () => {
@@ -159,7 +168,7 @@ describe('VideoPlayer', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Before タブへ切り替え、その後 After タブへ戻す
-      fireEvent.click(getByRole('button', { name: '変更前 (Before)' }));
+      fireEvent.click(getByRole('button', { name: 'Before' }));
       flush();
       await waitFor(() => {
         expect(fetchSpy).toHaveBeenCalledWith(
@@ -168,30 +177,10 @@ describe('VideoPlayer', () => {
         );
       });
 
-      fireEvent.click(getByRole('button', { name: '変更後 (After)' }));
+      fireEvent.click(getByRole('button', { name: 'After' }));
       flush();
       const afterIframe = getByTestId('ghvp-video-after') as HTMLIFrameElement;
-      const afterFrameId =
-        new URL(afterIframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
-      const postMessageSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
-      Object.defineProperty(afterIframe, 'contentWindow', {
-        value: { postMessage: postMessageSpy },
-        configurable: true,
-      });
-
-      window.dispatchEvent(
-        new MessageEvent('message', {
-          origin: extensionOrigin,
-          data: { type: 'ghvp:frame-ready', frameId: afterFrameId },
-        }),
-      );
-
-      await waitFor(() => {
-        expect(postMessageSpy).toHaveBeenCalledWith(
-          expect.objectContaining({ type: 'ghvp:load-video', blob: expect.any(Blob) }),
-          extensionOrigin,
-        );
-      });
+      expect(afterIframe.closest('[aria-hidden="true"]')).toBeNull();
 
       const afterFetchCount = fetchSpy.mock.calls.filter(
         ([url]) => url === 'https://github.com/octocat/hello/raw/head/assets/demo.mp4',

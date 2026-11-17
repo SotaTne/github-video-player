@@ -2,12 +2,12 @@ import { createSignal, onCleanup, Show } from 'solid-js';
 import { SegmentedControl, type SegmentOption } from '../../components/molecules/SegmentedControl';
 import { VideoFrame } from '../../components/molecules/VideoFrame';
 
-export type DiffViewMode = 'after' | 'before' | 'split';
+export type DiffViewMode = 'after' | 'before' | '2side';
 
 const DIFF_VIEW_OPTIONS: readonly SegmentOption<DiffViewMode>[] = [
-  { value: 'after', label: '変更後 (After)' },
-  { value: 'before', label: '変更前 (Before)' },
-  { value: 'split', label: '並列比較 (Split)' },
+  { value: 'after', label: 'After' },
+  { value: 'before', label: 'Before' },
+  { value: '2side', label: '2-Side' },
 ];
 
 export interface VideoPlayerProps {
@@ -18,7 +18,7 @@ export interface VideoPlayerProps {
 }
 
 /**
- * GitHub の Blob 表示および PR / Commit Diff 比較に対応したシンプルなインライン動画プレイヤー。
+ * GitHub の Blob 表示および PR / Commit Diff 比較に対応したインライン動画プレイヤー。
  */
 export function VideoPlayer(props: VideoPlayerProps) {
   const [viewMode, setViewMode] = createSignal<DiffViewMode>('after');
@@ -31,37 +31,31 @@ export function VideoPlayer(props: VideoPlayerProps) {
   });
 
   const canCompare = () => Boolean(props.beforeRawUrl && beforeAvailable());
-  const isSplit = () => viewMode() === 'split' && canCompare();
-  const isLazy = () => props.mode === 'diff';
+  const isTwoSide = () => viewMode() === '2side' && canCompare();
+  const isDiffMode = () => props.mode === 'diff';
+  const isAfterHidden = () => viewMode() === 'before' && canCompare();
 
   return (
     <article
       data-testid="ghvp-player"
       aria-label={props.filePath}
-      class="@container w-full text-gh-fg font-sans text-sm flex flex-col gap-3"
+      class={`@container w-full text-gh-fg font-sans text-sm flex flex-col gap-3 ${
+        isDiffMode() ? 'ghvp-diff-canvas p-4 rounded-b-md' : ''
+      }`}
     >
-      <Show when={canCompare()}>
-        <div class="flex items-center justify-end">
-          <SegmentedControl
-            options={DIFF_VIEW_OPTIONS}
-            value={viewMode()}
-            onChange={setViewMode}
-            ariaLabel="動画の比較表示モード"
-          />
-        </div>
-      </Show>
-
       <div
         class={
-          isSplit() ? 'grid grid-cols-1 @md:grid-cols-2 gap-4 w-full' : 'w-full flex justify-center'
+          isTwoSide()
+            ? 'grid grid-cols-1 @md:grid-cols-2 gap-4 w-full items-start'
+            : 'w-full flex justify-center'
         }
       >
-        <Show when={canCompare() && (viewMode() === 'before' || isSplit())}>
+        <Show when={canCompare() && (viewMode() === 'before' || isTwoSide())}>
           <VideoFrame
             src={props.beforeRawUrl!}
-            label="変更前 (Before)"
+            label={isTwoSide() ? 'Before' : undefined}
             labelVariant="danger"
-            lazy={isLazy()}
+            lazy={isDiffMode()}
             testId="ghvp-video-before"
             initialBlob={blobCache.get(props.beforeRawUrl!)}
             onBlobLoaded={(blob) => blobCache.set(props.beforeRawUrl!, blob)}
@@ -72,18 +66,28 @@ export function VideoPlayer(props: VideoPlayerProps) {
           />
         </Show>
 
-        <Show when={viewMode() === 'after' || isSplit()}>
-          <VideoFrame
-            src={props.rawUrl}
-            label={canCompare() ? '変更後 (After)' : undefined}
-            labelVariant="success"
-            lazy={isLazy()}
-            testId="ghvp-video-after"
-            initialBlob={blobCache.get(props.rawUrl)}
-            onBlobLoaded={(blob) => blobCache.set(props.rawUrl, blob)}
-          />
-        </Show>
+        <VideoFrame
+          src={props.rawUrl}
+          label={isTwoSide() ? 'After' : undefined}
+          labelVariant={isTwoSide() ? 'success' : undefined}
+          lazy={isDiffMode()}
+          hidden={isAfterHidden()}
+          testId="ghvp-video-after"
+          initialBlob={blobCache.get(props.rawUrl)}
+          onBlobLoaded={(blob) => blobCache.set(props.rawUrl, blob)}
+        />
       </div>
+
+      <Show when={canCompare()}>
+        <div class="flex items-center justify-center">
+          <SegmentedControl
+            options={DIFF_VIEW_OPTIONS}
+            value={viewMode()}
+            onChange={setViewMode}
+            ariaLabel="動画の比較表示モード"
+          />
+        </div>
+      </Show>
     </article>
   );
 }

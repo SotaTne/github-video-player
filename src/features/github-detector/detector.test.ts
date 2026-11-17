@@ -229,7 +229,7 @@ describe('github-detector', () => {
       expect(targets[0]!.container.textContent).not.toContain('Binary file not shown.');
 
       const splitButton = document.querySelector('button[aria-pressed="false"]:nth-of-type(3)');
-      expect(splitButton?.textContent).toBe('並列比較 (Split)');
+      expect(splitButton?.textContent).toBe('2-Side');
 
       fireEvent.click(splitButton!);
       flush();

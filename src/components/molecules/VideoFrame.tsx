@@ -14,6 +14,7 @@ export interface VideoFrameProps {
   label?: string;
   labelVariant?: 'danger' | 'success';
   lazy?: boolean;
+  hidden?: boolean;
   testId?: string;
   initialBlob?: Blob;
   onBlobLoaded?: (blob: Blob) => void;
@@ -583,16 +584,27 @@ export function VideoFrame(props: VideoFrameProps) {
     }
   };
 
+  const mediaMaxWidth = () =>
+    metadata() ? `${Math.round((520 * metadata()!.width) / metadata()!.height)}px` : '924px';
+
+  const frameBorderClass = () =>
+    props.labelVariant === 'danger'
+      ? 'border border-gh-danger/70'
+      : props.labelVariant === 'success'
+        ? 'border border-gh-success/70'
+        : 'border border-gh-border';
+
   return (
     <div
       ref={(el) => {
         containerRef = el;
       }}
-      class="flex flex-col items-center w-full gap-1.5"
+      aria-hidden={props.hidden ? 'true' : undefined}
+      class={`flex flex-col items-center w-full gap-1.5 ${props.hidden ? 'hidden' : ''}`}
     >
       <Show when={props.label}>
         {(label) => (
-          <div class="flex items-center justify-start w-full">
+          <div class="flex items-center justify-center w-full">
             <Badge variant={props.labelVariant ?? 'neutral'}>{label()}</Badge>
           </div>
         )}
@@ -628,7 +640,8 @@ export function VideoFrame(props: VideoFrameProps) {
               {...(props.lazy ? ({ loading: 'lazy' } as Record<string, string>) : {})}
               onLoadedMetadata={handleLoadedMetadata}
               onError={handleError}
-              class="max-h-[520px] w-full h-auto rounded bg-black object-contain"
+              style={{ 'max-width': mediaMaxWidth() }}
+              class={`max-h-[520px] w-full h-auto rounded object-contain ${frameBorderClass()}`}
             />
           }
         >
@@ -642,8 +655,9 @@ export function VideoFrame(props: VideoFrameProps) {
                     '--ghvp-aspect': metadata()
                       ? `${metadata()!.width} / ${metadata()!.height}`
                       : '16 / 9',
+                    'max-width': mediaMaxWidth(),
                   }}
-                  class="ghvp-media-box w-full max-h-[520px] rounded bg-black"
+                  class={`ghvp-media-box w-full max-h-[520px] rounded bg-gh-canvas ${frameBorderClass()}`}
                 />
               }
             >
@@ -656,14 +670,15 @@ export function VideoFrame(props: VideoFrameProps) {
                 }}
                 data-testid={props.testId}
                 src={frameSrc()}
-                title="動画プレイヤー"
+                aria-label="動画プレイヤー"
                 allow="fullscreen"
                 style={{
                   '--ghvp-aspect': metadata()
                     ? `${metadata()!.width} / ${metadata()!.height}`
                     : '16 / 9',
+                  'max-width': mediaMaxWidth(),
                 }}
-                class="ghvp-media-box w-full max-h-[520px] border-0 rounded bg-black"
+                class={`ghvp-media-box w-full max-h-[520px] rounded bg-gh-canvas ${frameBorderClass()}`}
               />
             </Show>
           )}
