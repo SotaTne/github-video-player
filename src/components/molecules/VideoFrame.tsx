@@ -107,10 +107,13 @@ export function VideoFrame(props: VideoFrameProps) {
   let containerRef: HTMLDivElement | undefined;
   let iframeRef: HTMLIFrameElement | undefined;
   let isFrameReady = false;
+  let isPlaying = false;
   let latestBlob: Blob | null = null;
+  let lastLoadedSrc: string | null = null;
 
   const handleError = () => {
     isFrameReady = false;
+    isPlaying = false;
     latestBlob = null;
     setHasError(true);
     props.onUnavailable?.();
@@ -154,6 +157,11 @@ export function VideoFrame(props: VideoFrameProps) {
         return;
       }
 
+      if (data['type'] === 'ghvp:playback-state') {
+        isPlaying = Boolean(data['playing']);
+        return;
+      }
+
       if (data['type'] === 'ghvp:video-error') {
         handleError();
       }
@@ -164,10 +172,11 @@ export function VideoFrame(props: VideoFrameProps) {
       window.removeEventListener('message', handleMessage);
       latestBlob = null;
       isFrameReady = false;
+      isPlaying = false;
     });
   }
 
-  // lazy 時はビューポート付近に入るまで動画 fetch を遅延し、大規模 Diff での不要な帯域・メモリ消費を抑える
+  // lazy 時はビューポート付近に入るまで動画 fetch を遅延し、大きく画面外へ離れた停止中動画は解放する
   createEffect(
     () => ({
       lazy: Boolean(props.lazy),
@@ -175,25 +184,43 @@ export function VideoFrame(props: VideoFrameProps) {
       loaded: shouldLoad(),
     }),
     ({ lazy, hasFrame, loaded }) => {
-      if (!hasFrame || loaded) return;
+      if (!hasFrame) return;
       if (!lazy || typeof IntersectionObserver === 'undefined') {
-        setShouldLoad(true);
+        if (!loaded) setShouldLoad(true);
         return;
       }
       const target = containerRef;
       if (!target) return;
 
-      const observer = new IntersectionObserver(
+      if (!loaded) {
+        const enterObserver = new IntersectionObserver(
+          (entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+              setShouldLoad(true);
+              enterObserver.disconnect();
+            }
+          },
+          { rootMargin: '200px' },
+        );
+        enterObserver.observe(target);
+        return () => enterObserver.disconnect();
+      }
+
+      const leaveObserver = new IntersectionObserver(
         (entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) {
-            setShouldLoad(true);
-            observer.disconnect();
+          const isNear = entries.some((entry) => entry.isIntersecting);
+          if (!isNear && !isPlaying) {
+            latestBlob = null;
+            isFrameReady = false;
+            iframeRef = undefined;
+            setShouldLoad(false);
+            leaveObserver.disconnect();
           }
         },
-        { rootMargin: '200px' },
+        { rootMargin: '1500px' },
       );
-      observer.observe(target);
-      return () => observer.disconnect();
+      leaveObserver.observe(target);
+      return () => leaveObserver.disconnect();
     },
   );
 
@@ -205,7 +232,10 @@ export function VideoFrame(props: VideoFrameProps) {
 
       const controller = new AbortController();
       latestBlob = null;
-      setMetadata(null);
+      if (lastLoadedSrc !== src) {
+        setMetadata(null);
+        lastLoadedSrc = src;
+      }
       setHasError(false);
 
       if (props.initialBlob && props.initialBlob.size > 0) {
@@ -327,7 +357,11 @@ export function VideoFrame(props: VideoFrameProps) {
               fallback={
                 <div
                   data-testid="ghvp-placeholder"
-                  style={{ '--ghvp-aspect': '16 / 9' }}
+                  style={{
+                    '--ghvp-aspect': metadata()
+                      ? `${metadata()!.width} / ${metadata()!.height}`
+                      : '16 / 9',
+                  }}
                   class="ghvp-media-box w-full max-h-[520px] rounded bg-black"
                 />
               }

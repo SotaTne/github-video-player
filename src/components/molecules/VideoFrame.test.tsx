@@ -502,4 +502,158 @@ describe('VideoFrame', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('unloads offscreen lazy iframe when scrolled far out while paused and reloads on re-enter', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() =>
+        Promise.resolve(new Response(sampleBytes.slice(0), { status: 200 })),
+      );
+
+    const callbacksByMargin = new Map<string, IntersectionObserverCallback>();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          callbacksByMargin.set(options?.rootMargin ?? '', callback);
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId, queryByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/develop/offscreen.mp4"
+          lazy
+          testId="video-offscreen"
+        />
+      ));
+
+      callbacksByMargin.get('200px')?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+      });
+      expect(getByTestId('video-offscreen')).toBeTruthy();
+
+      // 停止中のまま遠方（1500px 外）へ離脱するとプレースホルダーへ戻って解放される
+      callbacksByMargin.get('1500px')?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      expect(queryByTestId('video-offscreen')).toBeNull();
+      expect(getByTestId('ghvp-placeholder')).toBeTruthy();
+
+      // 再びビューポート付近に入ると再マウント・再取得される
+      callbacksByMargin.get('200px')?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+      });
+      expect(getByTestId('video-offscreen')).toBeTruthy();
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('keeps offscreen lazy iframe mounted while video is playing', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(sampleBytes, { status: 200 }));
+
+    const callbacksByMargin = new Map<string, IntersectionObserverCallback>();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          callbacksByMargin.set(options?.rootMargin ?? '', callback);
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId, queryByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/develop/playing.mp4"
+          lazy
+          testId="video-playing"
+        />
+      ));
+
+      callbacksByMargin.get('200px')?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      const iframe = getByTestId('video-playing') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:playback-state', frameId, playing: true },
+        }),
+      );
+
+      callbacksByMargin.get('1500px')?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      expect(getByTestId('video-playing')).toBeTruthy();
+      expect(queryByTestId('ghvp-placeholder')).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
 });
