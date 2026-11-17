@@ -78,15 +78,20 @@ async function acquireFetchSlot(signal: AbortSignal): Promise<void> {
   });
 }
 
+const NON_VIDEO_MIME_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'application/json',
+  'application/xml',
+  'text/xml',
+]);
+
 function resolveVideoContentType(contentType: string | null, fallbackMime: string): string | null {
   if (!contentType) return fallbackMime;
   const mime = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
   if (!mime) return fallbackMime;
-  if (mime.startsWith('video/')) return mime;
-  if (mime === 'application/octet-stream' || mime === 'binary/octet-stream') {
-    return fallbackMime;
-  }
-  return null;
+  if (NON_VIDEO_MIME_TYPES.has(mime)) return null;
+  return mime.startsWith('video/') ? mime : fallbackMime;
 }
 
 function isValidVideoBlob(blob: Blob): boolean {
