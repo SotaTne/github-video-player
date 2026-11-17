@@ -7,7 +7,12 @@ import {
   mountPlayerForTest,
   toGitHubPageHtml,
 } from '../../../test/github-fixtures';
-import { detectVideoTargets, markMounted, polishMountedDiffContainers } from './index';
+import {
+  detectVideoTargets,
+  hasRelevantDomMutation,
+  markMounted,
+  polishMountedDiffContainers,
+} from './index';
 
 describe('github-detector', () => {
   beforeEach(() => {
@@ -419,6 +424,49 @@ describe('github-detector', () => {
     } finally {
       jsonParseSpy.mockRestore();
     }
+  });
+
+  it('filters out irrelevant text/self-host mutations and accepts external element or mounted-text mutations', () => {
+    const plainDiv = document.createElement('div');
+    const mountedDiv = document.createElement('div');
+    mountedDiv.setAttribute('data-ghvp-mounted', 'true');
+    const ownHost = document.createElement('github-video-player');
+    const externalDiff = document.createElement('div');
+
+    expect(
+      hasRelevantDomMutation([
+        {
+          type: 'childList',
+          target: plainDiv,
+          addedNodes: [document.createTextNode('typing')],
+        },
+        {
+          type: 'childList',
+          target: mountedDiv,
+          addedNodes: [ownHost],
+        },
+      ]),
+    ).toBe(false);
+
+    expect(
+      hasRelevantDomMutation([
+        {
+          type: 'childList',
+          target: plainDiv,
+          addedNodes: [externalDiff],
+        },
+      ]),
+    ).toBe(true);
+
+    expect(
+      hasRelevantDomMutation([
+        {
+          type: 'childList',
+          target: mountedDiv,
+          addedNodes: [document.createTextNode('translated')],
+        },
+      ]),
+    ).toBe(true);
   });
 
   it('redetects a diff container when its mounted player host is removed by DOM rerender', () => {
