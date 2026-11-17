@@ -2,6 +2,15 @@
   "name": "github-video-player",
   "version": "1.0.0",
   "description": "Play video files (.mp4, .webm, .mov, etc.) inline on GitHub blob views and PR/Commit diffs.",
+  "keywords": [
+    "github",
+    "solidjs",
+    "video",
+    "webextension",
+    "wxt"
+  ],
+  "license": "MIT",
+  "author": "",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -11,19 +20,14 @@
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "postinstall": "wxt prepare",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "keywords": [
-    "github",
-    "video",
-    "webextension",
-    "wxt",
-    "solidjs"
-  ],
-  "author": "",
-  "license": "MIT",
-  "packageManager": "pnpm@10.8.1",
   "dependencies": {
     "solid-js": "^1.9.19"
   },
@@ -32,9 +36,12 @@
     "@tailwindcss/vite": "^4.3.5",
     "@wxt-dev/module-solid": "^1.1.4",
     "happy-dom": "^21.0.4",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
     "tailwindcss": "^4.3.5",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0",
     "wxt": "^0.21.5"
-  }
+  },
+  "packageManager": "pnpm@10.8.1"
 }
