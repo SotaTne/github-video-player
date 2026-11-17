@@ -1,6 +1,7 @@
 import { toGitHubRawUrl } from './url';
 
 export const MOUNTED_ATTR = 'data-ghvp-mounted';
+export const MOUNTED_SRC_ATTR = 'data-ghvp-src';
 
 export interface PrComparisonShas {
   owner?: string;
@@ -12,12 +13,18 @@ export interface PrComparisonShas {
 /**
  * 要素が存在し、かつ現在マウント処理中または有効なプレイヤーがマウント済みでないことを判定する型ガード。
  */
-export function isUnmounted(el: Element | null | undefined): el is HTMLElement {
+export function isUnmounted(
+  el: Element | null | undefined,
+  expectedSrc?: string,
+): el is HTMLElement {
   if (!el || !(el instanceof HTMLElement)) return false;
   const mountedState = el.getAttribute(MOUNTED_ATTR);
   if (!mountedState) return true;
   if (mountedState === 'mounting') return false;
-  return !el.querySelector('github-video-player, [data-ghvp-host]');
+  if (!el.querySelector('github-video-player, [data-ghvp-host]')) return true;
+  const mountedSrc = el.getAttribute(MOUNTED_SRC_ATTR);
+  if (expectedSrc && mountedSrc && mountedSrc !== expectedSrc) return true;
+  return false;
 }
 
 /**
@@ -30,8 +37,11 @@ export function markMounting(el: HTMLElement): void {
 /**
  * 繰り返しの DOM スキャン対象から外すため、要素にマウント済み属性を付与する。
  */
-export function markMounted(el: HTMLElement): void {
+export function markMounted(el: HTMLElement, src?: string): void {
   el.setAttribute(MOUNTED_ATTR, 'true');
+  if (src) {
+    el.setAttribute(MOUNTED_SRC_ATTR, src);
+  }
 }
 
 /**
