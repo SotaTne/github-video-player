@@ -52,7 +52,11 @@ export function VideoFrame(props: VideoFrameProps) {
 
   const [metadata, setMetadata] = createSignal<VideoMetadata | null>(null);
   const [hasError, setHasError] = createSignal(false);
+  const [shouldLoad, setShouldLoad] = createSignal(
+    !props.lazy || typeof IntersectionObserver === 'undefined',
+  );
 
+  let containerRef: HTMLDivElement | undefined;
   let iframeRef: HTMLIFrameElement | undefined;
   let isFrameReady = false;
   let pendingBlob: Blob | null = null;
@@ -112,9 +116,39 @@ export function VideoFrame(props: VideoFrameProps) {
     });
   }
 
+  // lazy 時はビューポート付近に入るまで動画 fetch を遅延し、大規模 Diff での不要な帯域・メモリ消費を抑える
+  createEffect(
+    () => ({
+      lazy: Boolean(props.lazy),
+      hasFrame: Boolean(extensionFrameUrl),
+      loaded: shouldLoad(),
+    }),
+    ({ lazy, hasFrame, loaded }) => {
+      if (!hasFrame || loaded) return;
+      if (!lazy || typeof IntersectionObserver === 'undefined') {
+        setShouldLoad(true);
+        return;
+      }
+      const target = containerRef;
+      if (!target) return;
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            setShouldLoad(true);
+            observer.disconnect();
+          }
+        },
+        { rootMargin: '200px' },
+      );
+      observer.observe(target);
+      return () => observer.disconnect();
+    },
+  );
+
   // Content Script 側のセッション Cookie 付き fetch で Blob を取得し、JS ヒープへの ArrayBuffer 一括展開を避けて iframe へ渡す
   createEffect(
-    () => (extensionFrameUrl ? props.src : null),
+    () => (extensionFrameUrl && shouldLoad() ? props.src : null),
     (src) => {
       if (!src) return;
 
@@ -168,7 +202,12 @@ export function VideoFrame(props: VideoFrameProps) {
   };
 
   return (
-    <div class="flex flex-col items-center w-full gap-1.5">
+    <div
+      ref={(el) => {
+        containerRef = el;
+      }}
+      class="flex flex-col items-center w-full gap-1.5"
+    >
       <Show when={props.label}>
         {(label) => (
           <div class="flex items-center justify-start w-full">

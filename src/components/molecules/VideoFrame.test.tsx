@@ -79,6 +79,24 @@ describe('VideoFrame', () => {
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(sampleBytes, { status: 200 }));
 
+    let observerCallback: IntersectionObserverCallback | undefined;
+    const disconnectSpy = vi.fn();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          observerCallback = callback;
+        }
+        observe = vi.fn();
+        disconnect = disconnectSpy;
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
+
     (globalThis as { chrome?: unknown }).chrome = {
       runtime: {
         id: 'test-extension-id',
@@ -107,6 +125,11 @@ describe('VideoFrame', () => {
         value: { postMessage: postMessageSpy },
         configurable: true,
       });
+
+      observerCallback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
 
       await waitFor(() => {
         expect(fetchSpy).toHaveBeenCalledWith(
@@ -150,6 +173,84 @@ describe('VideoFrame', () => {
       expect(queryByTestId('ghvp-metadata')).toBeNull();
     } finally {
       fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('defers fetching video until container intersects viewport when lazy is true', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(sampleBytes, { status: 200 }));
+
+    let observerCallback: IntersectionObserverCallback | undefined;
+    let observerOptions: IntersectionObserverInit | undefined;
+    const observeSpy = vi.fn();
+    const disconnectSpy = vi.fn();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          observerCallback = callback;
+          observerOptions = options;
+        }
+        observe = observeSpy;
+        disconnect = disconnectSpy;
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/develop/lazy-video.mp4"
+          lazy
+          testId="video-lazy-iframe"
+        />
+      ));
+
+      await Promise.resolve();
+      expect(observeSpy).toHaveBeenCalledTimes(1);
+      expect(observerOptions).toEqual({ rootMargin: '200px' });
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      observerCallback?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      await Promise.resolve();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(disconnectSpy).not.toHaveBeenCalled();
+
+      observerCallback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledWith(
+          'https://github.com/octocat/hello/raw/develop/lazy-video.mp4',
+          expect.objectContaining({ credentials: 'same-origin' }),
+        );
+      });
+      expect(disconnectSpy).toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
