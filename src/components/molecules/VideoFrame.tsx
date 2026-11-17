@@ -135,6 +135,7 @@ export function VideoFrame(props: VideoFrameProps) {
 
   let containerRef: HTMLDivElement | undefined;
   let iframeRef: HTMLIFrameElement | undefined;
+  let videoRef: HTMLVideoElement | undefined;
   let isFrameReady = false;
   let isPlaying = false;
   let hasPlayedOrSeeked = (savedPlaybackTimeBySrc.get(props.src) ?? 0) > 0;
@@ -210,7 +211,7 @@ export function VideoFrame(props: VideoFrameProps) {
       if (!req || req.type !== 'ghvp:range-request' || !req.requestId) return;
       const { requestId, start = 0, end = 0 } = req;
 
-      if (info.cachedFirstChunk && start === 0 && end < info.cachedFirstChunk.byteLength) {
+      if (info.cachedFirstChunk && start >= 0 && end < info.cachedFirstChunk.byteLength) {
         const sliced = info.cachedFirstChunk.slice(start, end + 1);
         channel.port1.postMessage(
           { type: 'ghvp:range-response', requestId, ok: true, buffer: sliced },
@@ -574,6 +575,18 @@ export function VideoFrame(props: VideoFrameProps) {
     },
   );
 
+  // 非表示タブへ切り替わったときに裏で動画の音声が再生され続けないよう一時停止する
+  createEffect(
+    () => Boolean(props.hidden),
+    (isHidden) => {
+      if (!isHidden) return;
+      videoRef?.pause();
+      if (isFrameReady && iframeRef?.contentWindow && extensionOrigin) {
+        iframeRef.contentWindow.postMessage({ type: 'ghvp:pause', frameId }, extensionOrigin);
+      }
+    },
+  );
+
   const handleLoadedMetadata = (e: Event) => {
     const video = e.currentTarget as HTMLVideoElement;
     if (video.videoWidth > 0 && video.videoHeight > 0) {
@@ -630,6 +643,9 @@ export function VideoFrame(props: VideoFrameProps) {
           when={extensionFrameUrl}
           fallback={
             <video
+              ref={(el) => {
+                videoRef = el;
+              }}
               data-testid={props.testId}
               src={props.src}
               width={metadata()?.width ?? 1280}

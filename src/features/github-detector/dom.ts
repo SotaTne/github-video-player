@@ -71,7 +71,9 @@ function hideNonPlayerChildren(container: HTMLElement): void {
       !child.hasAttribute('data-ghvp-host') &&
       child.tagName.toLowerCase() !== 'github-video-player'
     ) {
-      child.style.display = 'none';
+      if (child.style.display !== 'none') {
+        child.style.display = 'none';
+      }
     }
   }
 }
