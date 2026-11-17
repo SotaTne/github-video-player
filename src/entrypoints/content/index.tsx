@@ -1,6 +1,7 @@
 import './style.css';
 import {
   detectVideoTargets,
+  hasRelevantDomMutation,
   isSupportedGitHubVideoPage,
   polishMountedDiffContainers,
 } from '../../features/github-detector';
@@ -46,7 +47,11 @@ export default defineContentScript({
     ctx.addEventListener(document, 'turbo:render' as keyof DocumentEventMap, scheduleScan);
 
     // Turbo による <body> 差し替え後でも監視が途切れないよう documentElement を監視する
-    const observer = new MutationObserver(scheduleScan);
+    const observer = new MutationObserver((mutations) => {
+      if (hasRelevantDomMutation(mutations)) {
+        scheduleScan();
+      }
+    });
     const observeTarget = document.documentElement ?? document.body;
     if (observeTarget) {
       observer.observe(observeTarget, {

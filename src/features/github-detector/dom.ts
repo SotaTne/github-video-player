@@ -120,6 +120,41 @@ export function polishMountedDiffContainers(doc: Document): void {
   }
 }
 
+function isOwnPlayerHostNode(node: Node): boolean {
+  return (
+    node instanceof HTMLElement &&
+    (node.tagName.toLowerCase() === 'github-video-player' || node.hasAttribute('data-ghvp-host'))
+  );
+}
+
+/**
+ * MutationObserver の変更群に、動画検出やマウント済みコンテナの清掃が必要な要素追加が含まれるかを判定する。
+ */
+export function hasRelevantDomMutation(
+  mutations: ReadonlyArray<{
+    type: MutationRecord['type'];
+    target: Node;
+    addedNodes: ArrayLike<Node>;
+  }>,
+): boolean {
+  for (const mutation of mutations) {
+    if (mutation.type !== 'childList' || mutation.addedNodes.length === 0) continue;
+
+    const targetIsMounted =
+      mutation.target instanceof HTMLElement && mutation.target.hasAttribute(MOUNTED_ATTR);
+
+    for (const node of Array.from(mutation.addedNodes)) {
+      if (node.nodeType === Node.ELEMENT_NODE && !isOwnPlayerHostNode(node)) {
+        return true;
+      }
+      if (targetIsMounted && node.nodeType === Node.TEXT_NODE) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function parsePathname(urlOrPath: string): string {
   try {
     return new URL(urlOrPath, 'https://github.com').pathname;

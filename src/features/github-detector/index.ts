@@ -21,6 +21,7 @@ export {
 } from './url';
 export {
   MOUNTED_ATTR,
+  hasRelevantDomMutation,
   isUnmounted,
   markMounted,
   polishGitHubBlobPage,
