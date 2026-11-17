@@ -324,14 +324,16 @@ export function VideoFrame(props: VideoFrameProps) {
   }
 
   // lazy 時はビューポート付近に入るまで動画 fetch を遅延し、大きく画面外へ離れた停止中動画は解放する
+  // エラー表示（Raw ダウンロード導線）へ遷移済みの場合は同じ src で再取得せず状態を維持する
   createEffect(
     () => ({
       lazy: Boolean(props.lazy),
       hasFrame: Boolean(extensionFrameUrl),
       loaded: shouldLoad(),
+      errored: hasError(),
     }),
-    ({ lazy, hasFrame, loaded }) => {
-      if (!hasFrame) return;
+    ({ lazy, hasFrame, loaded, errored }) => {
+      if (!hasFrame || errored) return;
       if (!lazy || typeof IntersectionObserver === 'undefined') {
         if (!loaded) setShouldLoad(true);
         return;
@@ -356,7 +358,7 @@ export function VideoFrame(props: VideoFrameProps) {
       const leaveObserver = new IntersectionObserver(
         (entries) => {
           const isNear = entries.some((entry) => entry.isIntersecting);
-          if (!isNear && !isPlaying) {
+          if (!isNear && !isPlaying && !hasError()) {
             latestBlob = null;
             isFrameReady = false;
             iframeRef = undefined;
