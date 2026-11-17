@@ -1,8 +1,5 @@
-import { createRequire } from 'node:module';
 import { defineConfig } from 'vitest/config';
-
-const requireFromSolidModule = createRequire(import.meta.resolve('@wxt-dev/module-solid'));
-const solid = requireFromSolidModule('vite-plugin-solid');
+import solid from '@solidjs/vite-plugin';
 
 export default defineConfig({
   plugins: [solid()],

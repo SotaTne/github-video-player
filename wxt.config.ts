@@ -1,9 +1,9 @@
 import { defineConfig } from 'wxt';
+import solid from '@solidjs/vite-plugin';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   srcDir: 'src',
-  modules: ['@wxt-dev/module-solid'],
   manifest: {
     default_locale: 'ja',
     name: '__MSG_extName__',
@@ -17,6 +17,9 @@ export default defineConfig({
     ],
   },
   vite: () => ({
-    plugins: [tailwindcss()],
+    plugins: [solid(), tailwindcss()],
+    build: {
+      target: 'esnext',
+    },
   }),
 });

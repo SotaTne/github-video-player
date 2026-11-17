@@ -2,7 +2,7 @@
   "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
     "jsx": "preserve",
-    "jsxImportSource": "solid-js",
+    "jsxImportSource": "@solidjs/web",
     "types": []
   },
   "include": ["src/**/*", ".wxt/wxt.d.ts", "wxt.config.ts"],

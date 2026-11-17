@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, fireEvent } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 import { VideoPlayer } from './VideoPlayer';
 
 describe('VideoPlayer', () => {
@@ -39,11 +40,13 @@ describe('VideoPlayer', () => {
 
     // 変更前 (Before) に切り替える
     fireEvent.click(getByRole('button', { name: '変更前 (Before)' }));
+    flush();
     expect(getByTestId('ghvp-video-before').getAttribute('loading')).toBe('lazy');
     expect(queryByTestId('ghvp-video-after')).toBeNull();
 
     // 並列比較 (Split) に切り替える
     fireEvent.click(getByRole('button', { name: '並列比較 (Split)' }));
+    flush();
     expect(getByTestId('ghvp-video-before')).toBeTruthy();
     expect(getByTestId('ghvp-video-after')).toBeTruthy();
   });
@@ -59,18 +62,21 @@ describe('VideoPlayer', () => {
     ));
 
     fireEvent.click(getByRole('button', { name: '並列比較 (Split)' }));
+    flush();
 
     const beforeVideo = getByTestId('ghvp-video-before') as HTMLVideoElement;
     Object.defineProperty(beforeVideo, 'videoWidth', { value: 1280, configurable: true });
     Object.defineProperty(beforeVideo, 'videoHeight', { value: 720, configurable: true });
     Object.defineProperty(beforeVideo, 'duration', { value: 8, configurable: true });
     fireEvent(beforeVideo, new Event('loadedmetadata'));
+    flush();
 
     const afterVideo = getByTestId('ghvp-video-after') as HTMLVideoElement;
     Object.defineProperty(afterVideo, 'videoWidth', { value: 1920, configurable: true });
     Object.defineProperty(afterVideo, 'videoHeight', { value: 1080, configurable: true });
     Object.defineProperty(afterVideo, 'duration', { value: 15, configurable: true });
     fireEvent(afterVideo, new Event('loadedmetadata'));
+    flush();
 
     expect(beforeVideo.getAttribute('width')).toBe('1280');
     expect(beforeVideo.getAttribute('height')).toBe('720');
@@ -90,7 +96,9 @@ describe('VideoPlayer', () => {
     ));
 
     fireEvent.click(getByRole('button', { name: '変更前 (Before)' }));
+    flush();
     fireEvent(getByTestId('ghvp-video-before'), new Event('error'));
+    flush();
 
     expect(queryByRole('group', { name: '動画の比較表示モード' })).toBeNull();
     expect(getByTestId('ghvp-video-after')).toBeTruthy();
