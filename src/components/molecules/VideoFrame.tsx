@@ -99,6 +99,23 @@ function isValidVideoBlob(blob: Blob): boolean {
   return resolveVideoContentType(blob.type || null, 'video/mp4') !== null;
 }
 
+const MAX_SAVED_PLAYBACK_ENTRIES = 200;
+const savedPlaybackTimeBySrc = new Map<string, number>();
+
+function savePlaybackTime(src: string, time: number): void {
+  if (!src || !Number.isFinite(time) || time <= 0) {
+    savedPlaybackTimeBySrc.delete(src);
+    return;
+  }
+  savedPlaybackTimeBySrc.set(src, time);
+  if (savedPlaybackTimeBySrc.size > MAX_SAVED_PLAYBACK_ENTRIES) {
+    const oldestKey = savedPlaybackTimeBySrc.keys().next().value;
+    if (oldestKey !== undefined) {
+      savedPlaybackTimeBySrc.delete(oldestKey);
+    }
+  }
+}
+
 /**
  * 自身のメタデータとエラーフォールバックを独立して保持する動画フレーム。
  * 拡張機能実行時は CSP を回避するため拡張機能内 iframe 経由で Blob 再生する。
@@ -118,7 +135,7 @@ export function VideoFrame(props: VideoFrameProps) {
   let iframeRef: HTMLIFrameElement | undefined;
   let isFrameReady = false;
   let isPlaying = false;
-  let hasPlayedOrSeeked = false;
+  let hasPlayedOrSeeked = (savedPlaybackTimeBySrc.get(props.src) ?? 0) > 0;
   let latestBlob: Blob | null = null;
   let lastLoadedSrc: string | null = null;
   let activeStreamPort: MessagePort | null = null;
@@ -148,11 +165,13 @@ export function VideoFrame(props: VideoFrameProps) {
   const postVideoToFrame = (blob: Blob) => {
     const targetWindow = iframeRef?.contentWindow;
     if (!targetWindow || !extensionOrigin) return;
+    const initialTime = savedPlaybackTimeBySrc.get(activeLoadSrc ?? props.src) ?? 0;
     targetWindow.postMessage(
       {
         type: 'ghvp:load-video',
         frameId,
         blob,
+        ...(initialTime > 0 ? { initialTime } : {}),
       },
       extensionOrigin,
     );
@@ -204,6 +223,7 @@ export function VideoFrame(props: VideoFrameProps) {
     });
     channel.port1.start();
 
+    const initialTime = savedPlaybackTimeBySrc.get(src) ?? 0;
     targetWindow.postMessage(
       {
         type: 'ghvp:init-stream',
@@ -211,6 +231,7 @@ export function VideoFrame(props: VideoFrameProps) {
         streamId: info.streamId,
         totalSize: info.totalSize,
         contentType: info.contentType,
+        ...(initialTime > 0 ? { initialTime } : {}),
       },
       extensionOrigin,
       [channel.port2],
@@ -307,7 +328,14 @@ export function VideoFrame(props: VideoFrameProps) {
 
       if (data['type'] === 'ghvp:playback-state') {
         isPlaying = Boolean(data['playing']);
-        if (isPlaying || Number(data['currentTime']) > 0) {
+        const currentTime = Number(data['currentTime']);
+        const targetSrc = activeLoadSrc ?? props.src;
+        if (data['ended']) {
+          savePlaybackTime(targetSrc, 0);
+        } else if (Number.isFinite(currentTime) && currentTime >= 0) {
+          savePlaybackTime(targetSrc, currentTime);
+        }
+        if (isPlaying || currentTime > 0) {
           hasPlayedOrSeeked = true;
         }
         return;
