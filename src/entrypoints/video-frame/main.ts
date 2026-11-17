@@ -33,8 +33,9 @@ async function getActiveServiceWorker(): Promise<ServiceWorker | null> {
     return null;
   }
   try {
-    const registration = await navigator.serviceWorker.ready;
-    return navigator.serviceWorker.controller ?? registration.active;
+    await navigator.serviceWorker.ready;
+    // controller が無い場合、このフレームの fetch は SW に捕捉されないため Blob フォールバックへ回す
+    return navigator.serviceWorker.controller;
   } catch {
     return null;
   }

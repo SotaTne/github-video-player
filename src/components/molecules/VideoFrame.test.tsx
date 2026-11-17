@@ -790,4 +790,62 @@ describe('VideoFrame', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('plays video normally even when server returns text/plain content-type for video binary', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(sampleBytes, {
+        status: 200,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      }),
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId, queryByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/plain-header.mp4"
+          testId="video-plain-ct"
+        />
+      ));
+
+      const iframe = getByTestId('video-plain-ct') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+      const postMessageSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage: postMessageSpy },
+        configurable: true,
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'ghvp:load-video',
+            frameId,
+            blob: expect.any(Blob),
+          }),
+          extensionOrigin,
+        );
+      });
+      expect(queryByTestId('ghvp-error')).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
 });
