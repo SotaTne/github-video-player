@@ -562,4 +562,28 @@ describe('github-detector', () => {
     );
     expect(targets[0]!.beforeRawUrl).toBeUndefined();
   });
+
+  it('uses baseSha as rawUrl and omits beforeRawUrl for deleted files without inline links', () => {
+    document.body.innerHTML = `
+      <input type="hidden" name="comparison_start_oid" value="basesha" />
+      <input type="hidden" name="comparison_end_oid" value="headsha" />
+      <div class="diff__GZFl4M" id="diff-deleted-1">
+        <div data-diff-header-wrapper="true">
+          <span aria-label="deleted" class="fgColor-danger">BIN</span>
+          <h3><a href="#diff-deleted-1"><code>e2e/removed.webm</code></a></h3>
+        </div>
+        <div data-diff-anchor="diff-deleted-1">Binary file not shown.</div>
+      </div>
+    `;
+
+    const targets = detectVideoTargets(
+      document,
+      'https://github.com/octocat/hello/pull/12/changes',
+    );
+    expect(targets).toHaveLength(1);
+    expect(targets[0]!.rawUrl).toBe(
+      'https://github.com/octocat/hello/raw/basesha/e2e/removed.webm',
+    );
+    expect(targets[0]!.beforeRawUrl).toBeUndefined();
+  });
 });
