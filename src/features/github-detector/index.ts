@@ -24,6 +24,7 @@ export {
   hasRelevantDomMutation,
   isUnmounted,
   markMounted,
+  markMounting,
   polishGitHubBlobPage,
   polishGitHubDiffContainer,
   polishMountedDiffContainers,

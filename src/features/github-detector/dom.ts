@@ -10,10 +10,21 @@ export interface PrComparisonShas {
 }
 
 /**
- * 要素が存在し、かつまだこの拡張機能によってマウントされていないことを判定する型ガード。
+ * 要素が存在し、かつ現在マウント処理中または有効なプレイヤーがマウント済みでないことを判定する型ガード。
  */
 export function isUnmounted(el: Element | null | undefined): el is HTMLElement {
-  return Boolean(el && el instanceof HTMLElement && !el.hasAttribute(MOUNTED_ATTR));
+  if (!el || !(el instanceof HTMLElement)) return false;
+  const mountedState = el.getAttribute(MOUNTED_ATTR);
+  if (!mountedState) return true;
+  if (mountedState === 'mounting') return false;
+  return !el.querySelector('github-video-player, [data-ghvp-host]');
+}
+
+/**
+ * 非同期のマウント待機中に二重マウントされるのを防ぐため、要素にマウント中属性を付与する。
+ */
+export function markMounting(el: HTMLElement): void {
+  el.setAttribute(MOUNTED_ATTR, 'mounting');
 }
 
 /**

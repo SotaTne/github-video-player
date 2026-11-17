@@ -1,4 +1,4 @@
-import { createSignal, Show } from 'solid-js';
+import { createSignal, onCleanup, Show } from 'solid-js';
 import { SegmentedControl, type SegmentOption } from '../../components/molecules/SegmentedControl';
 import { VideoFrame } from '../../components/molecules/VideoFrame';
 
@@ -23,6 +23,12 @@ export interface VideoPlayerProps {
 export function VideoPlayer(props: VideoPlayerProps) {
   const [viewMode, setViewMode] = createSignal<DiffViewMode>('after');
   const [beforeAvailable, setBeforeAvailable] = createSignal(Boolean(props.beforeRawUrl));
+
+  // タブ往復時に同一動画を再 fetch しないよう、プレイヤー単位で取得済み Blob を保持する
+  const blobCache = new Map<string, Blob>();
+  onCleanup(() => {
+    blobCache.clear();
+  });
 
   const canCompare = () => Boolean(props.beforeRawUrl && beforeAvailable());
   const isSplit = () => viewMode() === 'split' && canCompare();
@@ -57,6 +63,8 @@ export function VideoPlayer(props: VideoPlayerProps) {
             labelVariant="danger"
             lazy={isLazy()}
             testId="ghvp-video-before"
+            initialBlob={blobCache.get(props.beforeRawUrl!)}
+            onBlobLoaded={(blob) => blobCache.set(props.beforeRawUrl!, blob)}
             onUnavailable={() => {
               setBeforeAvailable(false);
               if (viewMode() !== 'after') setViewMode('after');
@@ -71,6 +79,8 @@ export function VideoPlayer(props: VideoPlayerProps) {
             labelVariant="success"
             lazy={isLazy()}
             testId="ghvp-video-after"
+            initialBlob={blobCache.get(props.rawUrl)}
+            onBlobLoaded={(blob) => blobCache.set(props.rawUrl, blob)}
           />
         </Show>
       </div>

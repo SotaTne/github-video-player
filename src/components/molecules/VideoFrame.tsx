@@ -14,6 +14,8 @@ export interface VideoFrameProps {
   labelVariant?: 'danger' | 'success';
   lazy?: boolean;
   testId?: string;
+  initialBlob?: Blob;
+  onBlobLoaded?: (blob: Blob) => void;
   onUnavailable?: () => void;
 }
 
@@ -41,6 +43,17 @@ function resolveOrigin(urlStr: string): string {
   return parsed.origin !== 'null' ? parsed.origin : `${parsed.protocol}//${parsed.host}`;
 }
 
+function isValidVideoBlob(blob: Blob): boolean {
+  if (blob.size === 0) return false;
+  if (!blob.type) return true;
+  const mime = blob.type.split(';')[0]?.trim().toLowerCase() ?? '';
+  return (
+    mime.startsWith('video/') ||
+    mime === 'application/octet-stream' ||
+    mime === 'binary/octet-stream'
+  );
+}
+
 /**
  * 自身のメタデータとエラーフォールバックを独立して保持する動画フレーム。
  * 拡張機能実行時は CSP を回避するため拡張機能内 iframe 経由で Blob 再生する。
@@ -59,9 +72,11 @@ export function VideoFrame(props: VideoFrameProps) {
   let containerRef: HTMLDivElement | undefined;
   let iframeRef: HTMLIFrameElement | undefined;
   let isFrameReady = false;
-  let pendingBlob: Blob | null = null;
+  let latestBlob: Blob | null = null;
 
   const handleError = () => {
+    isFrameReady = false;
+    latestBlob = null;
     setHasError(true);
     props.onUnavailable?.();
   };
@@ -88,10 +103,9 @@ export function VideoFrame(props: VideoFrameProps) {
 
       if (data['type'] === 'ghvp:frame-ready') {
         isFrameReady = true;
-        if (pendingBlob) {
-          const blob = pendingBlob;
-          pendingBlob = null;
-          postVideoToFrame(blob);
+        // DOM 再配置等で iframe が再ロードされた場合にも再送できるよう latestBlob は保持する
+        if (latestBlob) {
+          postVideoToFrame(latestBlob);
         }
         return;
       }
@@ -113,6 +127,8 @@ export function VideoFrame(props: VideoFrameProps) {
     window.addEventListener('message', handleMessage);
     onCleanup(() => {
       window.removeEventListener('message', handleMessage);
+      latestBlob = null;
+      isFrameReady = false;
     });
   }
 
@@ -153,9 +169,17 @@ export function VideoFrame(props: VideoFrameProps) {
       if (!src) return;
 
       const controller = new AbortController();
-      pendingBlob = null;
+      latestBlob = null;
       setMetadata(null);
       setHasError(false);
+
+      if (props.initialBlob && props.initialBlob.size > 0) {
+        latestBlob = props.initialBlob;
+        if (isFrameReady && iframeRef?.contentWindow) {
+          postVideoToFrame(props.initialBlob);
+        }
+        return;
+      }
 
       void (async () => {
         try {
@@ -169,15 +193,19 @@ export function VideoFrame(props: VideoFrameProps) {
           }
           const rawBlob = await response.blob();
           if (controller.signal.aborted) return;
+          if (!isValidVideoBlob(rawBlob)) {
+            handleError();
+            return;
+          }
 
           const mimeType = getVideoMimeType(src);
           const blob = rawBlob.type.startsWith('video/')
             ? rawBlob
             : rawBlob.slice(0, rawBlob.size, mimeType);
+          latestBlob = blob;
+          props.onBlobLoaded?.(blob);
           if (isFrameReady && iframeRef?.contentWindow) {
             postVideoToFrame(blob);
-          } else {
-            pendingBlob = blob;
           }
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -253,7 +281,10 @@ export function VideoFrame(props: VideoFrameProps) {
           {(frameSrc) => (
             <iframe
               ref={(el) => {
-                iframeRef = el;
+                if (iframeRef !== el) {
+                  iframeRef = el;
+                  isFrameReady = false;
+                }
               }}
               data-testid={props.testId}
               src={frameSrc()}

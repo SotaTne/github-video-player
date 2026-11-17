@@ -53,9 +53,15 @@ window.addEventListener('message', (event) => {
     return;
   }
 
+  if (event.data.blob.size === 0) {
+    window.parent.postMessage({ type: 'ghvp:video-error', frameId }, '*');
+    return;
+  }
+
   revokeCurrentUrl();
   currentObjectUrl = URL.createObjectURL(event.data.blob);
   player.src = currentObjectUrl;
+  player.load();
 });
 
 window.addEventListener('pagehide', revokeCurrentUrl);
