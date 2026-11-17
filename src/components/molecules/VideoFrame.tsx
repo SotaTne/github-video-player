@@ -1,6 +1,9 @@
 import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import { getVideoMimeType } from '../../features/github-detector';
-import { DEFAULT_STREAM_CHUNK_BYTES } from '../../features/video-stream/rangeStream';
+import {
+  DEFAULT_STREAM_CHUNK_BYTES,
+  parseContentRangeTotalSize,
+} from '../../features/video-stream/rangeStream';
 import { Badge } from '../atoms/Badge';
 import { ExternalLink } from '../atoms/ExternalLink';
 
@@ -550,19 +553,27 @@ export function VideoFrame(props: VideoFrameProps) {
             return;
           }
 
-          // 1MB 以上の動画のみ HEAD で総サイズを確認し、取得済み先頭チャンクを引き継いで SW ストリーミングへ移行する
+          // 1MB 以上の動画のみ総サイズを確認し、取得済み先頭チャンクを引き継いで SW ストリーミングへ移行する
+          // 206 レスポンスの Content-Range から総サイズが読める場合は HEAD リクエストを省略する
           releaseFetchSlot();
           hasSlot = false;
 
-          const headRes = await fetch(src, {
-            method: 'HEAD',
-            credentials: 'same-origin',
-            signal: controller.signal,
-          });
-          if (controller.signal.aborted) return;
+          let totalSize = parseContentRangeTotalSize(firstRes.headers.get('content-range'));
+          if (totalSize === null) {
+            const headRes = await fetch(src, {
+              method: 'HEAD',
+              credentials: 'same-origin',
+              signal: controller.signal,
+            });
+            if (controller.signal.aborted) return;
 
-          const totalSize = Number(headRes.headers.get('content-length'));
-          if (headRes.ok && Number.isFinite(totalSize) && totalSize > 0) {
+            const headLength = Number(headRes.headers.get('content-length'));
+            if (headRes.ok && Number.isFinite(headLength) && headLength > 0) {
+              totalSize = headLength;
+            }
+          }
+
+          if (totalSize !== null && totalSize > 0) {
             if (totalSize <= firstBuffer.byteLength) {
               const blob = new Blob([firstBuffer], { type: contentType });
               latestBlob = blob;

@@ -61,6 +61,10 @@ export default defineBackground(() => {
       return;
     }
 
+    if (data['type'] === 'ghvp:keepalive-stream') {
+      return;
+    }
+
     if (data['type'] === 'ghvp:unregister-stream') {
       const streamId = typeof data['streamId'] === 'string' ? data['streamId'] : '';
       if (!streamId) return;

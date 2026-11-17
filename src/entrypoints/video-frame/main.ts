@@ -1,4 +1,4 @@
-import { STREAM_PATH_PREFIX } from '../../features/video-stream/rangeStream';
+import { startStreamKeepalive, STREAM_PATH_PREFIX } from '../../features/video-stream/rangeStream';
 
 interface LoadVideoMessage {
   type: 'ghvp:load-video';
@@ -22,6 +22,7 @@ const player = document.getElementById('player') as HTMLVideoElement | null;
 
 let currentObjectUrl: string | null = null;
 let activeStreamId: string | null = null;
+let stopKeepalive: (() => void) | null = null;
 let pendingInitialTime = 0;
 
 function revokeCurrentUrl(): void {
@@ -45,6 +46,8 @@ async function getActiveServiceWorker(): Promise<ServiceWorker | null> {
 }
 
 function unregisterCurrentStream(): void {
+  stopKeepalive?.();
+  stopKeepalive = null;
   if (!activeStreamId) return;
   const streamId = activeStreamId;
   activeStreamId = null;
@@ -201,6 +204,7 @@ window.addEventListener('message', (event) => {
       }
 
       activeStreamId = event.data.streamId;
+      stopKeepalive = startStreamKeepalive(event.data.streamId, getActiveServiceWorker);
       pendingInitialTime =
         typeof event.data.initialTime === 'number' && event.data.initialTime > 0
           ? event.data.initialTime

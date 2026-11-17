@@ -1447,4 +1447,80 @@ describe('VideoFrame streaming resilience', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('skips HEAD request when initial 206 response provides total size via Content-Range', async () => {
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const originalNavigatorDesc = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
+    Object.defineProperty(navigator, 'serviceWorker', { value: {}, configurable: true });
+
+    const firstChunk = new Uint8Array(DEFAULT_STREAM_CHUNK_BYTES);
+    const totalLargeSize = DEFAULT_STREAM_CHUNK_BYTES * 3;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (init?.method === 'HEAD') {
+        throw new Error('HEAD should not be called when Content-Range includes total size');
+      }
+      return Promise.resolve(
+        new Response(firstChunk.buffer.slice(0), {
+          status: 206,
+          headers: {
+            'content-type': 'video/mp4',
+            'content-range': `bytes 0-${DEFAULT_STREAM_CHUNK_BYTES - 1}/${totalLargeSize}`,
+          },
+        }),
+      );
+    });
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: { id: 'test-extension-id', getURL: (path: string) => `${STREAM_ORIGIN}${path}` },
+    };
+
+    try {
+      const { getByTestId, unmount } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/content-range.mp4"
+          testId="video-content-range"
+        />
+      ));
+      const iframe = getByTestId('video-content-range') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+
+      const postMessageSpy = vi.fn();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage: postMessageSpy },
+        configurable: true,
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: STREAM_ORIGIN,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'ghvp:init-stream',
+            frameId,
+            totalSize: totalLargeSize,
+            contentType: 'video/mp4',
+          }),
+          STREAM_ORIGIN,
+          expect.any(Array),
+        );
+      });
+
+      const headCalls = fetchSpy.mock.calls.filter(([, init]) => init?.method === 'HEAD');
+      expect(headCalls).toHaveLength(0);
+      unmount();
+    } finally {
+      fetchSpy.mockRestore();
+      if (originalNavigatorDesc) {
+        Object.defineProperty(navigator, 'serviceWorker', originalNavigatorDesc);
+      } else {
+        Reflect.deleteProperty(navigator, 'serviceWorker');
+      }
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
 });

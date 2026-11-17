@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createStreamFetchHandler, parseByteRange, type StreamSession } from './rangeStream';
+import {
+  createStreamFetchHandler,
+  parseByteRange,
+  parseContentRangeTotalSize,
+  startStreamKeepalive,
+  type StreamSession,
+} from './rangeStream';
 
 describe('video-stream/rangeStream', () => {
   describe('parseByteRange', () => {
@@ -12,6 +18,48 @@ describe('video-stream/rangeStream', () => {
       });
       expect(parseByteRange('bytes=-100', 1000, 1024)).toEqual({ start: 900, end: 999 });
       expect(parseByteRange('bytes=1000-', 1000, 1024)).toBe('unsatisfiable');
+    });
+  });
+
+  describe('parseContentRangeTotalSize', () => {
+    it('extracts total size from valid Content-Range header and returns null otherwise', () => {
+      expect(parseContentRangeTotalSize('bytes 0-1048575/5242880')).toBe(5_242_880);
+      expect(parseContentRangeTotalSize('bytes 0-0/*')).toBeNull();
+      expect(parseContentRangeTotalSize('bytes 0-10/0')).toBeNull();
+      expect(parseContentRangeTotalSize('invalid')).toBeNull();
+      expect(parseContentRangeTotalSize(null)).toBeNull();
+    });
+  });
+
+  describe('startStreamKeepalive', () => {
+    it('periodically sends keepalive message to the active service worker until stopped', async () => {
+      vi.useFakeTimers();
+      try {
+        const postMessage = vi.fn();
+        const stop = startStreamKeepalive('stream-keep-1', async () => ({ postMessage }), 20_000);
+
+        await vi.advanceTimersByTimeAsync(19_999);
+        expect(postMessage).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(postMessage).toHaveBeenCalledTimes(1);
+        expect(postMessage).toHaveBeenCalledWith(
+          {
+            type: 'ghvp:keepalive-stream',
+            streamId: 'stream-keep-1',
+          },
+          [],
+        );
+
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(postMessage).toHaveBeenCalledTimes(2);
+
+        stop();
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(postMessage).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
