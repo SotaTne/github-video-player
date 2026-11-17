@@ -118,6 +118,7 @@ export function VideoFrame(props: VideoFrameProps) {
   let iframeRef: HTMLIFrameElement | undefined;
   let isFrameReady = false;
   let isPlaying = false;
+  let hasPlayedOrSeeked = false;
   let latestBlob: Blob | null = null;
   let lastLoadedSrc: string | null = null;
   let activeStreamPort: MessagePort | null = null;
@@ -138,6 +139,7 @@ export function VideoFrame(props: VideoFrameProps) {
     cleanupActiveStream();
     isFrameReady = false;
     isPlaying = false;
+    hasPlayedOrSeeked = false;
     latestBlob = null;
     setHasError(true);
     props.onUnavailable?.();
@@ -305,6 +307,9 @@ export function VideoFrame(props: VideoFrameProps) {
 
       if (data['type'] === 'ghvp:playback-state') {
         isPlaying = Boolean(data['playing']);
+        if (isPlaying || Number(data['currentTime']) > 0) {
+          hasPlayedOrSeeked = true;
+        }
         return;
       }
 
@@ -320,6 +325,7 @@ export function VideoFrame(props: VideoFrameProps) {
       latestBlob = null;
       isFrameReady = false;
       isPlaying = false;
+      hasPlayedOrSeeked = false;
     });
   }
 
@@ -358,7 +364,7 @@ export function VideoFrame(props: VideoFrameProps) {
       const leaveObserver = new IntersectionObserver(
         (entries) => {
           const isNear = entries.some((entry) => entry.isIntersecting);
-          if (!isNear && !isPlaying && !hasError()) {
+          if (!isNear && !isPlaying && !hasPlayedOrSeeked && !hasError()) {
             latestBlob = null;
             isFrameReady = false;
             iframeRef = undefined;
@@ -387,6 +393,7 @@ export function VideoFrame(props: VideoFrameProps) {
       latestBlob = null;
       if (lastLoadedSrc !== src) {
         setMetadata(null);
+        hasPlayedOrSeeked = false;
         lastLoadedSrc = src;
       }
       setHasError(false);

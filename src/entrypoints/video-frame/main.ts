@@ -141,6 +141,7 @@ if (player) {
         type: 'ghvp:playback-state',
         frameId,
         playing: !player.paused && !player.ended,
+        currentTime: player.currentTime,
       },
       '*',
     );
@@ -149,6 +150,7 @@ if (player) {
   player.addEventListener('play', notifyPlaybackState);
   player.addEventListener('pause', notifyPlaybackState);
   player.addEventListener('ended', notifyPlaybackState);
+  player.addEventListener('seeked', notifyPlaybackState);
 }
 
 window.addEventListener('message', (event) => {
