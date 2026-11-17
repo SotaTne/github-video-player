@@ -55,25 +55,23 @@ export function VideoFrame(props: VideoFrameProps) {
 
   let iframeRef: HTMLIFrameElement | undefined;
   let isFrameReady = false;
-  let pendingPayload: { buffer: ArrayBuffer; mimeType: string } | null = null;
+  let pendingBlob: Blob | null = null;
 
   const handleError = () => {
     setHasError(true);
     props.onUnavailable?.();
   };
 
-  const postVideoToFrame = (payload: { buffer: ArrayBuffer; mimeType: string }) => {
+  const postVideoToFrame = (blob: Blob) => {
     const targetWindow = iframeRef?.contentWindow;
     if (!targetWindow || !extensionOrigin) return;
     targetWindow.postMessage(
       {
         type: 'ghvp:load-video',
         frameId,
-        buffer: payload.buffer,
-        mimeType: payload.mimeType,
+        blob,
       },
       extensionOrigin,
-      [payload.buffer],
     );
   };
 
@@ -86,10 +84,10 @@ export function VideoFrame(props: VideoFrameProps) {
 
       if (data['type'] === 'ghvp:frame-ready') {
         isFrameReady = true;
-        if (pendingPayload) {
-          const payload = pendingPayload;
-          pendingPayload = null;
-          postVideoToFrame(payload);
+        if (pendingBlob) {
+          const blob = pendingBlob;
+          pendingBlob = null;
+          postVideoToFrame(blob);
         }
         return;
       }
@@ -114,14 +112,14 @@ export function VideoFrame(props: VideoFrameProps) {
     });
   }
 
-  // Content Script 側のセッション Cookie 付き fetch で動画バイト列を取得し、iframe へ転送する
+  // Content Script 側のセッション Cookie 付き fetch で Blob を取得し、JS ヒープへの ArrayBuffer 一括展開を避けて iframe へ渡す
   createEffect(
     () => (extensionFrameUrl ? props.src : null),
     (src) => {
       if (!src) return;
 
       const controller = new AbortController();
-      pendingPayload = null;
+      pendingBlob = null;
       setMetadata(null);
       setHasError(false);
 
@@ -135,14 +133,17 @@ export function VideoFrame(props: VideoFrameProps) {
             handleError();
             return;
           }
-          const buffer = await response.arrayBuffer();
+          const rawBlob = await response.blob();
           if (controller.signal.aborted) return;
 
-          const payload = { buffer, mimeType: getVideoMimeType(src) };
+          const mimeType = getVideoMimeType(src);
+          const blob = rawBlob.type.startsWith('video/')
+            ? rawBlob
+            : rawBlob.slice(0, rawBlob.size, mimeType);
           if (isFrameReady && iframeRef?.contentWindow) {
-            postVideoToFrame(payload);
+            postVideoToFrame(blob);
           } else {
-            pendingPayload = payload;
+            pendingBlob = blob;
           }
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
