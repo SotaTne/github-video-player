@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fireEvent } from '@solidjs/testing-library';
 import { flush } from 'solid-js';
 import {
@@ -394,6 +394,30 @@ describe('github-detector', () => {
       ).toBe(false);
     } finally {
       dispose();
+    }
+  });
+
+  it('skips scanning unsupported GitHub pages and skips JSON parsing when diff has no videos', () => {
+    document.body.innerHTML = createGitHubPrDiffDom({
+      variant: 'react',
+      files: [{ path: 'src/index.ts', status: 'modified' }],
+    });
+    const script = document.createElement('script');
+    script.setAttribute('data-target', 'react-app.embeddedData');
+    script.textContent = JSON.stringify({ payload: { baseRefOid: 'a', headRefOid: 'b' } });
+    document.body.appendChild(script);
+
+    const jsonParseSpy = vi.spyOn(JSON, 'parse');
+    try {
+      expect(
+        detectVideoTargets(document, 'https://github.com/octocat/hello/issues/42'),
+      ).toHaveLength(0);
+      expect(
+        detectVideoTargets(document, 'https://github.com/octocat/hello/pull/12/changes'),
+      ).toHaveLength(0);
+      expect(jsonParseSpy).not.toHaveBeenCalled();
+    } finally {
+      jsonParseSpy.mockRestore();
     }
   });
 
