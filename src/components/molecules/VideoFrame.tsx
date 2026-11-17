@@ -78,15 +78,20 @@ async function acquireFetchSlot(signal: AbortSignal): Promise<void> {
   });
 }
 
+function resolveVideoContentType(contentType: string | null, fallbackMime: string): string | null {
+  if (!contentType) return fallbackMime;
+  const mime = contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!mime) return fallbackMime;
+  if (mime.startsWith('video/')) return mime;
+  if (mime === 'application/octet-stream' || mime === 'binary/octet-stream') {
+    return fallbackMime;
+  }
+  return null;
+}
+
 function isValidVideoBlob(blob: Blob): boolean {
   if (blob.size === 0) return false;
-  if (!blob.type) return true;
-  const mime = blob.type.split(';')[0]?.trim().toLowerCase() ?? '';
-  return (
-    mime.startsWith('video/') ||
-    mime === 'application/octet-stream' ||
-    mime === 'binary/octet-stream'
-  );
+  return resolveVideoContentType(blob.type || null, 'video/mp4') !== null;
 }
 
 /**
@@ -110,8 +115,22 @@ export function VideoFrame(props: VideoFrameProps) {
   let isPlaying = false;
   let latestBlob: Blob | null = null;
   let lastLoadedSrc: string | null = null;
+  let activeStreamPort: MessagePort | null = null;
+  let pendingStreamInfo: { streamId: string; totalSize: number; contentType: string } | null = null;
+  let activeLoadController: AbortController | null = null;
+  let activeLoadSrc: string | null = null;
+  let hasFallenBackToBlob = false;
+
+  const cleanupActiveStream = () => {
+    if (activeStreamPort) {
+      activeStreamPort.close();
+      activeStreamPort = null;
+    }
+    pendingStreamInfo = null;
+  };
 
   const handleError = () => {
+    cleanupActiveStream();
     isFrameReady = false;
     isPlaying = false;
     latestBlob = null;
@@ -132,6 +151,105 @@ export function VideoFrame(props: VideoFrameProps) {
     );
   };
 
+  const postStreamToFrame = (
+    src: string,
+    info: { streamId: string; totalSize: number; contentType: string },
+    signal: AbortSignal,
+  ) => {
+    const targetWindow = iframeRef?.contentWindow;
+    if (!targetWindow || !extensionOrigin) return;
+
+    cleanupActiveStream();
+    const channel = new MessageChannel();
+    activeStreamPort = channel.port1;
+    channel.port1.addEventListener('message', (event: MessageEvent) => {
+      const req = event.data as {
+        type?: string;
+        requestId?: string;
+        start?: number;
+        end?: number;
+      } | null;
+      if (!req || req.type !== 'ghvp:range-request' || !req.requestId) return;
+      const { requestId, start = 0, end = 0 } = req;
+
+      void (async () => {
+        try {
+          const response = await fetch(src, {
+            headers: { Range: `bytes=${start}-${end}` },
+            credentials: 'same-origin',
+            signal,
+          });
+          if (response.status !== 206) {
+            channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: false });
+            return;
+          }
+          const buffer = await response.arrayBuffer();
+          if (signal.aborted) return;
+          channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: true, buffer }, [
+            buffer,
+          ]);
+        } catch {
+          if (!signal.aborted) {
+            channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: false });
+          }
+        }
+      })();
+    });
+    channel.port1.start();
+
+    targetWindow.postMessage(
+      {
+        type: 'ghvp:init-stream',
+        frameId,
+        streamId: info.streamId,
+        totalSize: info.totalSize,
+        contentType: info.contentType,
+      },
+      extensionOrigin,
+      [channel.port2],
+    );
+  };
+
+  const loadViaBlob = async (src: string, controller: AbortController) => {
+    let hasSlot = false;
+    try {
+      await acquireFetchSlot(controller.signal);
+      hasSlot = true;
+
+      const response = await fetch(src, {
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        handleError();
+        return;
+      }
+      const rawBlob = await response.blob();
+      if (controller.signal.aborted) return;
+      if (!isValidVideoBlob(rawBlob)) {
+        handleError();
+        return;
+      }
+
+      const mimeType = getVideoMimeType(src);
+      const blob = rawBlob.type.startsWith('video/')
+        ? rawBlob
+        : rawBlob.slice(0, rawBlob.size, mimeType);
+      latestBlob = blob;
+      props.onBlobLoaded?.(blob);
+      if (isFrameReady && iframeRef?.contentWindow) {
+        postVideoToFrame(blob);
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      handleError();
+    } finally {
+      if (hasSlot) {
+        releaseFetchSlot();
+      }
+    }
+  };
+
   // 拡張機能内 iframe からの準備完了・メタデータ・エラー通知を受信する
   if (extensionOrigin) {
     const handleMessage = (event: MessageEvent) => {
@@ -144,6 +262,29 @@ export function VideoFrame(props: VideoFrameProps) {
         // DOM 再配置等で iframe が再ロードされた場合にも再送できるよう latestBlob は保持する
         if (latestBlob) {
           postVideoToFrame(latestBlob);
+        } else if (
+          pendingStreamInfo &&
+          activeLoadSrc &&
+          activeLoadController &&
+          !activeLoadController.signal.aborted
+        ) {
+          const info = pendingStreamInfo;
+          pendingStreamInfo = null;
+          postStreamToFrame(activeLoadSrc, info, activeLoadController.signal);
+        }
+        return;
+      }
+
+      if (data['type'] === 'ghvp:stream-fallback') {
+        cleanupActiveStream();
+        if (
+          !hasFallenBackToBlob &&
+          activeLoadSrc &&
+          activeLoadController &&
+          !activeLoadController.signal.aborted
+        ) {
+          hasFallenBackToBlob = true;
+          void loadViaBlob(activeLoadSrc, activeLoadController);
         }
         return;
       }
@@ -170,6 +311,7 @@ export function VideoFrame(props: VideoFrameProps) {
     window.addEventListener('message', handleMessage);
     onCleanup(() => {
       window.removeEventListener('message', handleMessage);
+      cleanupActiveStream();
       latestBlob = null;
       isFrameReady = false;
       isPlaying = false;
@@ -224,13 +366,17 @@ export function VideoFrame(props: VideoFrameProps) {
     },
   );
 
-  // Content Script 側のセッション Cookie 付き fetch で Blob を取得し、JS ヒープへの ArrayBuffer 一括展開を避けて iframe へ渡す
+  // Content Script 側のセッション Cookie 付き fetch で動画をロード（SW ストリーミング優先、非対応時は Blob へフォールバック）
   createEffect(
     () => (extensionFrameUrl && shouldLoad() ? props.src : null),
     (src) => {
       if (!src) return;
 
       const controller = new AbortController();
+      cleanupActiveStream();
+      activeLoadController = controller;
+      activeLoadSrc = src;
+      hasFallenBackToBlob = false;
       latestBlob = null;
       if (lastLoadedSrc !== src) {
         setMetadata(null);
@@ -243,51 +389,66 @@ export function VideoFrame(props: VideoFrameProps) {
         if (isFrameReady && iframeRef?.contentWindow) {
           postVideoToFrame(props.initialBlob);
         }
-        return;
+        return () => {
+          controller.abort();
+          cleanupActiveStream();
+        };
+      }
+
+      const supportsSwStream =
+        typeof MessageChannel !== 'undefined' &&
+        typeof navigator !== 'undefined' &&
+        'serviceWorker' in navigator;
+
+      if (!supportsSwStream) {
+        void loadViaBlob(src, controller);
+        return () => {
+          controller.abort();
+          cleanupActiveStream();
+        };
       }
 
       void (async () => {
-        let hasSlot = false;
         try {
-          await acquireFetchSlot(controller.signal);
-          hasSlot = true;
-
-          const response = await fetch(src, {
+          const headRes = await fetch(src, {
+            method: 'HEAD',
             credentials: 'same-origin',
             signal: controller.signal,
           });
-          if (!response.ok) {
-            handleError();
-            return;
-          }
-          const rawBlob = await response.blob();
           if (controller.signal.aborted) return;
-          if (!isValidVideoBlob(rawBlob)) {
-            handleError();
-            return;
-          }
 
-          const mimeType = getVideoMimeType(src);
-          const blob = rawBlob.type.startsWith('video/')
-            ? rawBlob
-            : rawBlob.slice(0, rawBlob.size, mimeType);
-          latestBlob = blob;
-          props.onBlobLoaded?.(blob);
-          if (isFrameReady && iframeRef?.contentWindow) {
-            postVideoToFrame(blob);
+          const totalSize = Number(headRes.headers.get('content-length'));
+          const contentType = resolveVideoContentType(
+            headRes.headers.get('content-type'),
+            getVideoMimeType(src),
+          );
+
+          if (headRes.ok && Number.isFinite(totalSize) && totalSize > 0 && contentType) {
+            const streamInfo = {
+              streamId: `${frameId}-${Date.now()}`,
+              totalSize,
+              contentType,
+            };
+            if (isFrameReady && iframeRef?.contentWindow) {
+              postStreamToFrame(src, streamInfo, controller.signal);
+            } else {
+              pendingStreamInfo = streamInfo;
+            }
+            return;
           }
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
-          handleError();
-        } finally {
-          if (hasSlot) {
-            releaseFetchSlot();
-          }
+        }
+
+        if (!controller.signal.aborted && !hasFallenBackToBlob) {
+          hasFallenBackToBlob = true;
+          void loadViaBlob(src, controller);
         }
       })();
 
       return () => {
         controller.abort();
+        cleanupActiveStream();
       };
     },
   );

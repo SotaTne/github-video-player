@@ -656,4 +656,138 @@ describe('VideoFrame', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('initializes Service Worker stream via HEAD and falls back to Blob when stream fails', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const originalNavigatorDesc = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: {},
+      configurable: true,
+    });
+
+    const chunkBytes = new Uint8Array([10, 20, 30, 40]).buffer;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      if (init?.method === 'HEAD') {
+        return Promise.resolve(
+          new Response(null, {
+            status: 200,
+            headers: {
+              'content-length': '4',
+              'content-type': 'video/mp4',
+            },
+          }),
+        );
+      }
+      const headers = init?.headers as Record<string, string> | undefined;
+      if (headers?.['Range']) {
+        return Promise.resolve(new Response(chunkBytes.slice(0), { status: 206 }));
+      }
+      return Promise.resolve(new Response(chunkBytes.slice(0), { status: 200 }));
+    });
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/large.mp4"
+          testId="video-stream"
+        />
+      ));
+
+      const iframe = getByTestId('video-stream') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+
+      let transferredPort: MessagePort | undefined;
+      const postMessageSpy = vi.fn(
+        (message: unknown, _targetOrigin: string, transfer?: Transferable[]) => {
+          const msg = message as { type?: string };
+          if (msg.type === 'ghvp:init-stream') {
+            transferredPort = transfer?.[0] as MessagePort | undefined;
+          }
+        },
+      );
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage: postMessageSpy },
+        configurable: true,
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'ghvp:init-stream',
+            frameId,
+            totalSize: 4,
+            contentType: 'video/mp4',
+          }),
+          extensionOrigin,
+          expect.any(Array),
+        );
+      });
+
+      // 転送された MessagePort へ Range 要求を送り、206 チャンクが返ることを検証
+      const rangeResponse = await new Promise<{ ok: boolean; buffer?: ArrayBuffer }>((resolve) => {
+        if (!transferredPort) {
+          resolve({ ok: false });
+          return;
+        }
+        transferredPort.addEventListener('message', (e) => {
+          resolve(e.data as { ok: boolean; buffer?: ArrayBuffer });
+        });
+        transferredPort.start();
+        transferredPort.postMessage(
+          {
+            type: 'ghvp:range-request',
+            requestId: 'r1',
+            start: 0,
+            end: 3,
+          },
+          [],
+        );
+      });
+
+      expect(rangeResponse.ok).toBe(true);
+      expect(rangeResponse.buffer?.byteLength).toBe(4);
+
+      // ストリーミング失敗通知を受けると Blob 方式へフォールバックすること
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:stream-fallback', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'ghvp:load-video',
+            frameId,
+            blob: expect.any(Blob),
+          }),
+          extensionOrigin,
+        );
+      });
+    } finally {
+      fetchSpy.mockRestore();
+      if (originalNavigatorDesc) {
+        Object.defineProperty(navigator, 'serviceWorker', originalNavigatorDesc);
+      } else {
+        Reflect.deleteProperty(navigator, 'serviceWorker');
+      }
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
 });
