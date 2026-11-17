@@ -9,6 +9,12 @@ export default defineConfig({
     description:
       'Play video files (.mp4, .webm, .mov, etc.) directly on GitHub blob pages and PR/Commit diffs.',
     version: '1.0.0',
+    web_accessible_resources: [
+      {
+        resources: ['video-frame.html', 'chunks/*', 'assets/*'],
+        matches: ['*://github.com/*'],
+      },
+    ],
   },
   vite: () => ({
     plugins: [tailwindcss()],
