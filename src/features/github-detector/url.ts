@@ -105,3 +105,16 @@ export function parseGitHubBlobUrl(url: string): ParsedBlobUrl | null {
     return null;
   }
 }
+
+/**
+ * 動画の Blob 表示または PR / Commit / Compare Diff を含みうる GitHub ページかを判定する。
+ */
+export function isSupportedGitHubVideoPage(url: string): boolean {
+  if (parseGitHubBlobUrl(url) !== null) return true;
+  try {
+    const parsed = new URL(url, 'https://github.com');
+    return /^\/[^/]+\/[^/]+\/(pull|commit|compare)(\/|$)/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}

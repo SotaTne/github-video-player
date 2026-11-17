@@ -46,8 +46,7 @@ function collectDiffBlocks(doc: Document): HTMLElement[] {
     const anchorId = anchorEl.getAttribute('data-diff-anchor');
     if (!anchorId) continue;
 
-    const alreadyContained = Array.from(blocks).some((block) => block.contains(anchorEl));
-    if (alreadyContained) continue;
+    if (anchorEl.closest(DIFF_BLOCK_SELECTOR)) continue;
 
     const block = findCommitBlockForAnchor(anchorEl, anchorId);
     if (block) {
@@ -134,7 +133,7 @@ function resolveDiffRawUrls(
 function toDiffMountTarget(
   fileEl: HTMLElement,
   index: number,
-  shas: PrComparisonShas,
+  getShas: () => PrComparisonShas,
   origin: string,
 ): VideoMountTarget | null {
   if (!isUnmounted(fileEl)) return null;
@@ -145,7 +144,7 @@ function toDiffMountTarget(
   const container = resolveDiffContentArea(fileEl);
   if (!container) return null;
 
-  const urls = resolveDiffRawUrls(fileEl, filePath, shas, origin);
+  const urls = resolveDiffRawUrls(fileEl, filePath, getShas(), origin);
   if (!urls) return null;
 
   return {
@@ -166,8 +165,10 @@ export function detectDiffTargets(
   origin: string,
   currentUrl?: string,
 ): VideoMountTarget[] {
-  const shas = extractPrComparisonShas(doc, currentUrl);
+  let cachedShas: PrComparisonShas | undefined;
+  const getShas = () => (cachedShas ??= extractPrComparisonShas(doc, currentUrl));
+
   return collectDiffBlocks(doc)
-    .map((fileEl, index) => toDiffMountTarget(fileEl, index, shas, origin))
+    .map((fileEl, index) => toDiffMountTarget(fileEl, index, getShas, origin))
     .filter((target): target is VideoMountTarget => target !== null);
 }

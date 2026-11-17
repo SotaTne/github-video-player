@@ -1,5 +1,6 @@
 import { detectBlobTargets } from './detectBlob';
 import { detectDiffTargets } from './detectDiff';
+import { isSupportedGitHubVideoPage } from './url';
 
 export interface VideoMountTarget {
   id: string;
@@ -13,6 +14,7 @@ export interface VideoMountTarget {
 export {
   getVideoExtension,
   getVideoMimeType,
+  isSupportedGitHubVideoPage,
   isVideoFile,
   toGitHubRawUrl,
   parseGitHubBlobUrl,
@@ -30,6 +32,8 @@ export {
  * 現在の GitHub ドキュメントを走査し、未マウントの動画 Blob 表示や Diff エントリを検出する。
  */
 export function detectVideoTargets(doc: Document, currentUrl: string): VideoMountTarget[] {
+  if (!isSupportedGitHubVideoPage(currentUrl)) return [];
+
   const origin = (() => {
     try {
       return new URL(currentUrl).origin;

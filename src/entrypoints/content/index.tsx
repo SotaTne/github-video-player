@@ -1,5 +1,9 @@
 import './style.css';
-import { detectVideoTargets, polishMountedDiffContainers } from '../../features/github-detector';
+import {
+  detectVideoTargets,
+  isSupportedGitHubVideoPage,
+  polishMountedDiffContainers,
+} from '../../features/github-detector';
 import { mountTargetWithShadowUi } from './mount';
 
 export default defineContentScript({
@@ -8,18 +12,28 @@ export default defineContentScript({
 
   main(ctx) {
     let scanTimer: ReturnType<typeof setTimeout> | null = null;
+    let isScanning = false;
 
     const scanAndMount = () => {
-      polishMountedDiffContainers(document);
-      const targets = detectVideoTargets(document, window.location.href);
-      for (const target of targets) {
-        void mountTargetWithShadowUi(ctx, target);
+      if (!isSupportedGitHubVideoPage(window.location.href)) return;
+
+      isScanning = true;
+      try {
+        polishMountedDiffContainers(document);
+        const targets = detectVideoTargets(document, window.location.href);
+        for (const target of targets) {
+          void mountTargetWithShadowUi(ctx, target);
+        }
+      } finally {
+        isScanning = false;
       }
     };
 
     // 連続的な DOM 更新やスクロール中でも 100ms 以内にスキャンが実行されるようスロットル制御する
     const scheduleScan = () => {
-      if (scanTimer !== null) return;
+      if (isScanning || scanTimer !== null || !isSupportedGitHubVideoPage(window.location.href)) {
+        return;
+      }
       scanTimer = setTimeout(() => {
         scanTimer = null;
         scanAndMount();

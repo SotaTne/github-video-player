@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   getVideoExtension,
   getVideoMimeType,
+  isSupportedGitHubVideoPage,
   isVideoFile,
   toGitHubRawUrl,
   parseGitHubBlobUrl,
@@ -70,6 +71,29 @@ describe('github-detector/url', () => {
 
     it('returns null for non-video blob URLs', () => {
       expect(parseGitHubBlobUrl('https://github.com/octocat/hello/blob/main/README.md')).toBeNull();
+    });
+  });
+
+  describe('isSupportedGitHubVideoPage', () => {
+    it('returns true only for video blob pages and pull/commit/compare diff pages', () => {
+      expect(
+        isSupportedGitHubVideoPage('https://github.com/octocat/hello/blob/main/demo.mp4'),
+      ).toBe(true);
+      expect(isSupportedGitHubVideoPage('https://github.com/octocat/hello/pull/12/files')).toBe(
+        true,
+      );
+      expect(isSupportedGitHubVideoPage('https://github.com/octocat/hello/commit/abc123')).toBe(
+        true,
+      );
+      expect(
+        isSupportedGitHubVideoPage('https://github.com/octocat/hello/compare/main...feat'),
+      ).toBe(true);
+
+      expect(
+        isSupportedGitHubVideoPage('https://github.com/octocat/hello/blob/main/README.md'),
+      ).toBe(false);
+      expect(isSupportedGitHubVideoPage('https://github.com/octocat/hello/issues')).toBe(false);
+      expect(isSupportedGitHubVideoPage('https://github.com/notifications')).toBe(false);
     });
   });
 });
