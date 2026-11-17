@@ -26,6 +26,12 @@ function renderPlayer(target: VideoMountTarget, container: HTMLElement): () => v
   );
 }
 
+function isContextInvalidatedError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.toLowerCase().includes('extension context invalidated')
+  );
+}
+
 /**
  * WXT が管理する隔離された Shadow DOM ルート内に VideoPlayer をマウントする。
  */
@@ -33,8 +39,33 @@ export async function mountTargetWithShadowUi(
   ctx: ContentScriptContext,
   target: VideoMountTarget,
 ): Promise<void> {
-  if (!isUnmounted(target.container, target.rawUrl)) return;
+  if (ctx.isInvalid || !isUnmounted(target.container, target.rawUrl)) return;
   markMounting(target.container);
+
+  let ui: Awaited<ReturnType<typeof createShadowRootUi>>;
+  try {
+    ui = await createShadowRootUi(ctx, {
+      name: 'github-video-player',
+      position: 'inline',
+      anchor: target.container,
+      append: 'first',
+      onMount(container) {
+        return renderPlayer(target, container);
+      },
+      onRemove(dispose) {
+        dispose?.();
+      },
+    });
+  } catch (error) {
+    target.container.removeAttribute(MOUNTED_ATTR);
+    if (ctx.isInvalid || isContextInvalidatedError(error)) return;
+    throw error;
+  }
+
+  if (!target.container.isConnected || ctx.isInvalid) {
+    target.container.removeAttribute(MOUNTED_ATTR);
+    return;
+  }
 
   for (const staleHost of Array.from(target.container.querySelectorAll('github-video-player'))) {
     staleHost.remove();
@@ -44,24 +75,6 @@ export async function mountTargetWithShadowUi(
     polishGitHubBlobPage(document, target.container);
   } else {
     polishGitHubDiffContainer(target.container);
-  }
-
-  const ui = await createShadowRootUi(ctx, {
-    name: 'github-video-player',
-    position: 'inline',
-    anchor: target.container,
-    append: 'first',
-    onMount(container) {
-      return renderPlayer(target, container);
-    },
-    onRemove(dispose) {
-      dispose?.();
-    },
-  });
-
-  if (!target.container.isConnected || ctx.isInvalid) {
-    target.container.removeAttribute(MOUNTED_ATTR);
-    return;
   }
 
   ui.mount();
