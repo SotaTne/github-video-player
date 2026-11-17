@@ -46,6 +46,21 @@ if (player) {
     if (!currentObjectUrl) return;
     window.parent.postMessage({ type: 'ghvp:video-error', frameId }, '*');
   });
+
+  const notifyPlaybackState = () => {
+    window.parent.postMessage(
+      {
+        type: 'ghvp:playback-state',
+        frameId,
+        playing: !player.paused && !player.ended,
+      },
+      '*',
+    );
+  };
+
+  player.addEventListener('play', notifyPlaybackState);
+  player.addEventListener('pause', notifyPlaybackState);
+  player.addEventListener('ended', notifyPlaybackState);
 }
 
 window.addEventListener('message', (event) => {

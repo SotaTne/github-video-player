@@ -43,6 +43,41 @@ function resolveOrigin(urlStr: string): string {
   return parsed.origin !== 'null' ? parsed.origin : `${parsed.protocol}//${parsed.host}`;
 }
 
+const MAX_CONCURRENT_VIDEO_FETCHES = 3;
+let activeVideoFetches = 0;
+const pendingFetchQueue: Array<() => void> = [];
+
+function releaseFetchSlot(): void {
+  activeVideoFetches = Math.max(0, activeVideoFetches - 1);
+  const next = pendingFetchQueue.shift();
+  next?.();
+}
+
+async function acquireFetchSlot(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+  if (activeVideoFetches < MAX_CONCURRENT_VIDEO_FETCHES) {
+    activeVideoFetches += 1;
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const start = () => {
+      signal.removeEventListener('abort', onAbort);
+      activeVideoFetches += 1;
+      resolve();
+    };
+    const onAbort = () => {
+      const index = pendingFetchQueue.indexOf(start);
+      if (index !== -1) pendingFetchQueue.splice(index, 1);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    pendingFetchQueue.push(start);
+  });
+}
+
 function isValidVideoBlob(blob: Blob): boolean {
   if (blob.size === 0) return false;
   if (!blob.type) return true;
@@ -72,10 +107,13 @@ export function VideoFrame(props: VideoFrameProps) {
   let containerRef: HTMLDivElement | undefined;
   let iframeRef: HTMLIFrameElement | undefined;
   let isFrameReady = false;
+  let isPlaying = false;
   let latestBlob: Blob | null = null;
+  let lastLoadedSrc: string | null = null;
 
   const handleError = () => {
     isFrameReady = false;
+    isPlaying = false;
     latestBlob = null;
     setHasError(true);
     props.onUnavailable?.();
@@ -119,6 +157,11 @@ export function VideoFrame(props: VideoFrameProps) {
         return;
       }
 
+      if (data['type'] === 'ghvp:playback-state') {
+        isPlaying = Boolean(data['playing']);
+        return;
+      }
+
       if (data['type'] === 'ghvp:video-error') {
         handleError();
       }
@@ -129,10 +172,11 @@ export function VideoFrame(props: VideoFrameProps) {
       window.removeEventListener('message', handleMessage);
       latestBlob = null;
       isFrameReady = false;
+      isPlaying = false;
     });
   }
 
-  // lazy 時はビューポート付近に入るまで動画 fetch を遅延し、大規模 Diff での不要な帯域・メモリ消費を抑える
+  // lazy 時はビューポート付近に入るまで動画 fetch を遅延し、大きく画面外へ離れた停止中動画は解放する
   createEffect(
     () => ({
       lazy: Boolean(props.lazy),
@@ -140,25 +184,43 @@ export function VideoFrame(props: VideoFrameProps) {
       loaded: shouldLoad(),
     }),
     ({ lazy, hasFrame, loaded }) => {
-      if (!hasFrame || loaded) return;
+      if (!hasFrame) return;
       if (!lazy || typeof IntersectionObserver === 'undefined') {
-        setShouldLoad(true);
+        if (!loaded) setShouldLoad(true);
         return;
       }
       const target = containerRef;
       if (!target) return;
 
-      const observer = new IntersectionObserver(
+      if (!loaded) {
+        const enterObserver = new IntersectionObserver(
+          (entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+              setShouldLoad(true);
+              enterObserver.disconnect();
+            }
+          },
+          { rootMargin: '200px' },
+        );
+        enterObserver.observe(target);
+        return () => enterObserver.disconnect();
+      }
+
+      const leaveObserver = new IntersectionObserver(
         (entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) {
-            setShouldLoad(true);
-            observer.disconnect();
+          const isNear = entries.some((entry) => entry.isIntersecting);
+          if (!isNear && !isPlaying) {
+            latestBlob = null;
+            isFrameReady = false;
+            iframeRef = undefined;
+            setShouldLoad(false);
+            leaveObserver.disconnect();
           }
         },
-        { rootMargin: '200px' },
+        { rootMargin: '1500px' },
       );
-      observer.observe(target);
-      return () => observer.disconnect();
+      leaveObserver.observe(target);
+      return () => leaveObserver.disconnect();
     },
   );
 
@@ -170,7 +232,10 @@ export function VideoFrame(props: VideoFrameProps) {
 
       const controller = new AbortController();
       latestBlob = null;
-      setMetadata(null);
+      if (lastLoadedSrc !== src) {
+        setMetadata(null);
+        lastLoadedSrc = src;
+      }
       setHasError(false);
 
       if (props.initialBlob && props.initialBlob.size > 0) {
@@ -182,7 +247,11 @@ export function VideoFrame(props: VideoFrameProps) {
       }
 
       void (async () => {
+        let hasSlot = false;
         try {
+          await acquireFetchSlot(controller.signal);
+          hasSlot = true;
+
           const response = await fetch(src, {
             credentials: 'same-origin',
             signal: controller.signal,
@@ -210,6 +279,10 @@ export function VideoFrame(props: VideoFrameProps) {
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
           handleError();
+        } finally {
+          if (hasSlot) {
+            releaseFetchSlot();
+          }
         }
       })();
 
@@ -279,24 +352,39 @@ export function VideoFrame(props: VideoFrameProps) {
           }
         >
           {(frameSrc) => (
-            <iframe
-              ref={(el) => {
-                if (iframeRef !== el) {
-                  iframeRef = el;
-                  isFrameReady = false;
-                }
-              }}
-              data-testid={props.testId}
-              src={frameSrc()}
-              title="動画プレイヤー"
-              allow="fullscreen"
-              style={{
-                '--ghvp-aspect': metadata()
-                  ? `${metadata()!.width} / ${metadata()!.height}`
-                  : '16 / 9',
-              }}
-              class="ghvp-media-box w-full max-h-[520px] border-0 rounded bg-black"
-            />
+            <Show
+              when={shouldLoad()}
+              fallback={
+                <div
+                  data-testid="ghvp-placeholder"
+                  style={{
+                    '--ghvp-aspect': metadata()
+                      ? `${metadata()!.width} / ${metadata()!.height}`
+                      : '16 / 9',
+                  }}
+                  class="ghvp-media-box w-full max-h-[520px] rounded bg-black"
+                />
+              }
+            >
+              <iframe
+                ref={(el) => {
+                  if (iframeRef !== el) {
+                    iframeRef = el;
+                    isFrameReady = false;
+                  }
+                }}
+                data-testid={props.testId}
+                src={frameSrc()}
+                title="動画プレイヤー"
+                allow="fullscreen"
+                style={{
+                  '--ghvp-aspect': metadata()
+                    ? `${metadata()!.width} / ${metadata()!.height}`
+                    : '16 / 9',
+                }}
+                class="ghvp-media-box w-full max-h-[520px] border-0 rounded bg-black"
+              />
+            </Show>
           )}
         </Show>
       </Show>
