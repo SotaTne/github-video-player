@@ -91,14 +91,25 @@ function resolveDiffContentArea(fileEl: HTMLElement): HTMLElement | null {
   return contentArea;
 }
 
-function isAddedDiffFile(fileEl: HTMLElement): boolean {
-  if (fileEl.getAttribute('data-file-type') === 'added') return true;
-  if (
-    fileEl.querySelector(
-      '[title="added" i], [aria-label*="added" i], [data-file-type="added"], [data-diff-status="added"], .octicon-file-added, .octicon-diff-added',
-    )
-  ) {
-    return true;
+function getDiffStatusFlags(fileEl: HTMLElement): { isAdded: boolean; isDeleted: boolean } {
+  const fileType = fileEl.getAttribute('data-file-type');
+  const explicitAdded =
+    fileType === 'added' ||
+    Boolean(
+      fileEl.querySelector(
+        '[title="added" i], [aria-label*="added" i], [data-file-type="added"], [data-diff-status="added"], .octicon-file-added, .octicon-diff-added',
+      ),
+    );
+  const explicitDeleted =
+    fileType === 'deleted' ||
+    Boolean(
+      fileEl.querySelector(
+        '[title="removed" i], [title="deleted" i], [aria-label*="deleted" i], [aria-label*="removed" i], [data-file-type="deleted"], [data-diff-status="deleted"], .octicon-file-removed, .octicon-diff-removed',
+      ),
+    );
+
+  if (explicitAdded || explicitDeleted) {
+    return { isAdded: explicitAdded, isDeleted: explicitDeleted && !explicitAdded };
   }
 
   const headerRoot =
@@ -109,7 +120,10 @@ function isAddedDiffFile(fileEl: HTMLElement): boolean {
   const hasDanger = Boolean(
     headerRoot.querySelector('.fgColor-danger, [class*="diffstat-block-deleted"]'),
   );
-  return hasSuccess && !hasDanger;
+  return {
+    isAdded: hasSuccess && !hasDanger,
+    isDeleted: hasDanger && !hasSuccess,
+  };
 }
 
 function resolveDiffRawUrls(
@@ -119,6 +133,8 @@ function resolveDiffRawUrls(
   origin: string,
 ): { rawUrl: string; beforeRawUrl?: string } | null {
   const { owner, repo, baseSha, headSha } = shas;
+  const { isAdded, isDeleted } = getDiffStatusFlags(fileEl);
+  const fallbackSha = isDeleted ? baseSha : headSha;
 
   let rawUrl = findRawUrlInElement(fileEl, undefined, origin);
   if (!rawUrl) {
@@ -127,17 +143,15 @@ function resolveDiffRawUrls(
       ?.getAttribute('href');
     if (viewFileHref) {
       rawUrl = toGitHubRawUrl(viewFileHref, origin);
-    } else if (owner && repo && headSha) {
-      rawUrl = buildRawUrl(origin, owner, repo, headSha, filePath);
+    } else if (owner && repo && fallbackSha) {
+      rawUrl = buildRawUrl(origin, owner, repo, fallbackSha, filePath);
     }
   }
 
   if (!rawUrl) return null;
 
-  const isAdded = isAddedDiffFile(fileEl);
-
   let beforeRawUrl: string | undefined;
-  if (!isAdded && owner && repo && baseSha && headSha && baseSha !== headSha) {
+  if (!isAdded && !isDeleted && owner && repo && baseSha && headSha && baseSha !== headSha) {
     const candidateBefore = buildRawUrl(origin, owner, repo, baseSha, filePath);
     if (candidateBefore !== rawUrl) {
       beforeRawUrl = candidateBefore;
