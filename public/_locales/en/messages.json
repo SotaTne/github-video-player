@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "GitHub Video Player",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "Play video files (.mp4, .webm, .mov, etc.) directly inline on GitHub blob pages and Pull Request or Commit diffs.",
+    "description": "Extension description for chrome://extensions and Chrome Web Store"
+  }
+}
