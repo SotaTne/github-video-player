@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@solidjs/testing-library';
 import { createSignal, flush } from 'solid-js';
+import { DEFAULT_STREAM_CHUNK_BYTES } from '../../features/video-stream/rangeStream';
 import { VideoFrame } from './VideoFrame';
 
 describe('VideoFrame', () => {
@@ -666,14 +667,17 @@ describe('VideoFrame', () => {
       configurable: true,
     });
 
-    const chunkBytes = new Uint8Array([10, 20, 30, 40]).buffer;
+    const fullFirstChunk = new Uint8Array(DEFAULT_STREAM_CHUNK_BYTES);
+    fullFirstChunk[0] = 10;
+    fullFirstChunk[1] = 20;
+    const totalLargeSize = DEFAULT_STREAM_CHUNK_BYTES * 2;
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
       if (init?.method === 'HEAD') {
         return Promise.resolve(
           new Response(null, {
             status: 200,
             headers: {
-              'content-length': '4',
+              'content-length': String(totalLargeSize),
               'content-type': 'video/mp4',
             },
           }),
@@ -681,9 +685,9 @@ describe('VideoFrame', () => {
       }
       const headers = init?.headers as Record<string, string> | undefined;
       if (headers?.['Range']) {
-        return Promise.resolve(new Response(chunkBytes.slice(0), { status: 206 }));
+        return Promise.resolve(new Response(fullFirstChunk.buffer.slice(0), { status: 206 }));
       }
-      return Promise.resolve(new Response(chunkBytes.slice(0), { status: 200 }));
+      return Promise.resolve(new Response(fullFirstChunk.buffer.slice(0), { status: 200 }));
     });
 
     (globalThis as { chrome?: unknown }).chrome = {
@@ -730,7 +734,7 @@ describe('VideoFrame', () => {
           expect.objectContaining({
             type: 'ghvp:init-stream',
             frameId,
-            totalSize: 4,
+            totalSize: totalLargeSize,
             contentType: 'video/mp4',
           }),
           extensionOrigin,
@@ -738,7 +742,9 @@ describe('VideoFrame', () => {
         );
       });
 
-      // 転送された MessagePort へ Range 要求を送り、206 チャンクが返ることを検証
+      const fetchCallsBeforeRange = fetchSpy.mock.calls.length;
+
+      // 転送された MessagePort へ先頭範囲の Range 要求を送り、キャッシュからネットワーク再取得なしで返ることを検証
       const rangeResponse = await new Promise<{ ok: boolean; buffer?: ArrayBuffer }>((resolve) => {
         if (!transferredPort) {
           resolve({ ok: false });
@@ -761,6 +767,7 @@ describe('VideoFrame', () => {
 
       expect(rangeResponse.ok).toBe(true);
       expect(rangeResponse.buffer?.byteLength).toBe(4);
+      expect(fetchSpy.mock.calls.length).toBe(fetchCallsBeforeRange);
 
       // ストリーミング失敗通知を受けると Blob 方式へフォールバックすること
       window.dispatchEvent(
@@ -1073,6 +1080,77 @@ describe('VideoFrame', () => {
       });
     } finally {
       fetchSpy.mockRestore();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('plays small videos directly as Blob in a single Range request without HEAD', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const originalNavigatorDesc = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: {},
+      configurable: true,
+    });
+
+    const smallBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(smallBytes, {
+        status: 206,
+        headers: { 'content-type': 'video/webm' },
+      }),
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/small-clip.webm"
+          testId="video-small-fast"
+        />
+      ));
+
+      const iframe = getByTestId('video-small-fast') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+      const postMessageSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage: postMessageSpy },
+        configurable: true,
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'ghvp:load-video',
+            frameId,
+            blob: expect.any(Blob),
+          }),
+          extensionOrigin,
+        );
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'HEAD')).toBe(false);
+    } finally {
+      fetchSpy.mockRestore();
+      if (originalNavigatorDesc) {
+        Object.defineProperty(navigator, 'serviceWorker', originalNavigatorDesc);
+      } else {
+        Reflect.deleteProperty(navigator, 'serviceWorker');
+      }
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });

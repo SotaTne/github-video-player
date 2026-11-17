@@ -171,6 +171,10 @@ export function createStreamFetchHandler(
 
     const buffer = await requestChunkFromPort(session.port, range.start, range.end, request.signal);
     if (!buffer || buffer.byteLength === 0) {
+      if (!request.signal.aborted) {
+        session.port.close();
+        sessions.delete(streamId);
+      }
       return new Response('Stream Upstream Failed', { status: 502 });
     }
 

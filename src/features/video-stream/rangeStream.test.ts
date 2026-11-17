@@ -104,6 +104,7 @@ describe('video-stream/rangeStream', () => {
           }),
         );
         expect(res.status).toBe(502);
+        expect(sessions.has('stream-fail')).toBe(false);
       } finally {
         channel.port1.close();
         channel.port2.close();

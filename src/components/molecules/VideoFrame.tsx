@@ -1,5 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import { getVideoMimeType } from '../../features/github-detector';
+import { DEFAULT_STREAM_CHUNK_BYTES } from '../../features/video-stream/rangeStream';
 import { Badge } from '../atoms/Badge';
 import { ExternalLink } from '../atoms/ExternalLink';
 
@@ -139,7 +140,12 @@ export function VideoFrame(props: VideoFrameProps) {
   let latestBlob: Blob | null = null;
   let lastLoadedSrc: string | null = null;
   let activeStreamPort: MessagePort | null = null;
-  let pendingStreamInfo: { streamId: string; totalSize: number; contentType: string } | null = null;
+  let pendingStreamInfo: {
+    streamId: string;
+    totalSize: number;
+    contentType: string;
+    cachedFirstChunk?: ArrayBuffer;
+  } | null = null;
   let activeLoadController: AbortController | null = null;
   let activeLoadSrc: string | null = null;
   let hasFallenBackToBlob = false;
@@ -179,7 +185,12 @@ export function VideoFrame(props: VideoFrameProps) {
 
   const postStreamToFrame = (
     src: string,
-    info: { streamId: string; totalSize: number; contentType: string },
+    info: {
+      streamId: string;
+      totalSize: number;
+      contentType: string;
+      cachedFirstChunk?: ArrayBuffer;
+    },
     signal: AbortSignal,
   ) => {
     const targetWindow = iframeRef?.contentWindow;
@@ -197,6 +208,15 @@ export function VideoFrame(props: VideoFrameProps) {
       } | null;
       if (!req || req.type !== 'ghvp:range-request' || !req.requestId) return;
       const { requestId, start = 0, end = 0 } = req;
+
+      if (info.cachedFirstChunk && start === 0 && end < info.cachedFirstChunk.byteLength) {
+        const sliced = info.cachedFirstChunk.slice(start, end + 1);
+        channel.port1.postMessage(
+          { type: 'ghvp:range-response', requestId, ok: true, buffer: sliced },
+          [sliced],
+        );
+        return;
+      }
 
       void (async () => {
         try {
@@ -451,7 +471,55 @@ export function VideoFrame(props: VideoFrameProps) {
       }
 
       void (async () => {
+        let hasSlot = false;
         try {
+          await acquireFetchSlot(controller.signal);
+          hasSlot = true;
+
+          // まず先頭 1 チャンクだけ取得し、1MB 未満や Range 非対応(200)なら HEAD・SW なしで即 Blob 再生する
+          const firstRes = await fetch(src, {
+            headers: { Range: `bytes=0-${DEFAULT_STREAM_CHUNK_BYTES - 1}` },
+            credentials: 'same-origin',
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+
+          if (!firstRes.ok) {
+            handleError();
+            return;
+          }
+
+          const contentType = resolveVideoContentType(
+            firstRes.headers.get('content-type'),
+            getVideoMimeType(src),
+          );
+          if (!contentType) {
+            handleError();
+            return;
+          }
+
+          const firstBuffer = await firstRes.arrayBuffer();
+          if (controller.signal.aborted) return;
+
+          if (firstBuffer.byteLength === 0) {
+            handleError();
+            return;
+          }
+
+          if (firstRes.status !== 206 || firstBuffer.byteLength < DEFAULT_STREAM_CHUNK_BYTES) {
+            const blob = new Blob([firstBuffer], { type: contentType });
+            latestBlob = blob;
+            props.onBlobLoaded?.(blob);
+            if (isFrameReady && iframeRef?.contentWindow) {
+              postVideoToFrame(blob);
+            }
+            return;
+          }
+
+          // 1MB 以上の動画のみ HEAD で総サイズを確認し、取得済み先頭チャンクを引き継いで SW ストリーミングへ移行する
+          releaseFetchSlot();
+          hasSlot = false;
+
           const headRes = await fetch(src, {
             method: 'HEAD',
             credentials: 'same-origin',
@@ -460,16 +528,22 @@ export function VideoFrame(props: VideoFrameProps) {
           if (controller.signal.aborted) return;
 
           const totalSize = Number(headRes.headers.get('content-length'));
-          const contentType = resolveVideoContentType(
-            headRes.headers.get('content-type'),
-            getVideoMimeType(src),
-          );
+          if (headRes.ok && Number.isFinite(totalSize) && totalSize > 0) {
+            if (totalSize <= firstBuffer.byteLength) {
+              const blob = new Blob([firstBuffer], { type: contentType });
+              latestBlob = blob;
+              props.onBlobLoaded?.(blob);
+              if (isFrameReady && iframeRef?.contentWindow) {
+                postVideoToFrame(blob);
+              }
+              return;
+            }
 
-          if (headRes.ok && Number.isFinite(totalSize) && totalSize > 0 && contentType) {
             const streamInfo = {
               streamId: `${frameId}-${Date.now()}`,
               totalSize,
               contentType,
+              cachedFirstChunk: firstBuffer,
             };
             if (isFrameReady && iframeRef?.contentWindow) {
               postStreamToFrame(src, streamInfo, controller.signal);
@@ -480,6 +554,10 @@ export function VideoFrame(props: VideoFrameProps) {
           }
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
+        } finally {
+          if (hasSlot) {
+            releaseFetchSlot();
+          }
         }
 
         if (!controller.signal.aborted && !hasFallenBackToBlob) {
