@@ -56,6 +56,32 @@ describe('VideoPlayer', () => {
     expect(getAllByText('After')).toHaveLength(2);
   });
 
+  it('keeps the Before frame mounted but hidden after switching back to After', () => {
+    const { getByRole, getByTestId } = render(() => (
+      <VideoPlayer
+        filePath="assets/demo.mp4"
+        rawUrl="https://github.com/octocat/hello/raw/head/assets/demo.mp4"
+        beforeRawUrl="https://github.com/octocat/hello/raw/base/assets/demo.mp4"
+        mode="diff"
+      />
+    ));
+
+    fireEvent.click(getByRole('button', { name: 'Before' }));
+    flush();
+    const beforeEl = getByTestId('ghvp-video-before');
+
+    fireEvent.click(getByRole('button', { name: 'After' }));
+    flush();
+    expect(getByTestId('ghvp-video-before')).toBe(beforeEl);
+    expect(beforeEl.closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(getByTestId('ghvp-video-after').closest('[aria-hidden="true"]')).toBeNull();
+
+    fireEvent.click(getByRole('button', { name: 'Before' }));
+    flush();
+    expect(getByTestId('ghvp-video-before')).toBe(beforeEl);
+    expect(beforeEl.closest('[aria-hidden="true"]')).toBeNull();
+  });
+
   it('updates dimensions independently for Before and After videos in 2-Side view', () => {
     const { getByRole, getByTestId, queryAllByTestId } = render(() => (
       <VideoPlayer
