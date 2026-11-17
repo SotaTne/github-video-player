@@ -127,6 +127,8 @@ describe('VideoFrame', () => {
       const iframe = getByTestId('video-iframe') as HTMLIFrameElement;
       expect(iframe.tagName).toBe('IFRAME');
       expect(iframe.hasAttribute('loading')).toBe(false);
+      expect(iframe.hasAttribute('title')).toBe(false);
+      expect(iframe.getAttribute('aria-label')).toBe('動画プレイヤー');
       const frameSrc = iframe.getAttribute('src') ?? '';
       const frameId = new URL(frameSrc).searchParams.get('frameId') ?? '';
       expect(frameSrc).toContain(`${extensionOrigin}/video-frame.html?frameId=`);
