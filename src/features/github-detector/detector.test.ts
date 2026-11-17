@@ -501,4 +501,41 @@ describe('github-detector', () => {
     );
     expect(redetectedTargets).toHaveLength(1);
   });
+
+  it('redetects a reused blob container when the navigated video URL changes', () => {
+    document.body.innerHTML = createGitHubBlobDom({
+      owner: 'octocat',
+      repo: 'hello',
+      ref: 'main',
+      filePath: 'first.mp4',
+      variant: 'react',
+    });
+
+    const firstTargets = detectVideoTargets(
+      document,
+      'https://github.com/octocat/hello/blob/main/first.mp4',
+    );
+    expect(firstTargets).toHaveLength(1);
+
+    const container = firstTargets[0]!.container;
+    markMounted(container, firstTargets[0]!.rawUrl);
+    container.appendChild(document.createElement('github-video-player'));
+
+    // 同じ URL のままならスキップする
+    expect(
+      detectVideoTargets(document, 'https://github.com/octocat/hello/blob/main/first.mp4'),
+    ).toHaveLength(0);
+
+    // SPA 遷移で同じコンテナ要素が再利用されつつ URL が別動画へ変わった場合は再検出すること
+    const rawLink = document.querySelector<HTMLAnchorElement>('[data-testid="raw-button"]');
+    if (rawLink) {
+      rawLink.setAttribute('href', 'https://github.com/octocat/hello/raw/main/second.mp4');
+    }
+    const secondTargets = detectVideoTargets(
+      document,
+      'https://github.com/octocat/hello/blob/main/second.mp4',
+    );
+    expect(secondTargets).toHaveLength(1);
+    expect(secondTargets[0]!.rawUrl).toBe('https://github.com/octocat/hello/raw/main/second.mp4');
+  });
 });

@@ -33,8 +33,12 @@ export async function mountTargetWithShadowUi(
   ctx: ContentScriptContext,
   target: VideoMountTarget,
 ): Promise<void> {
-  if (!isUnmounted(target.container)) return;
+  if (!isUnmounted(target.container, target.rawUrl)) return;
   markMounting(target.container);
+
+  for (const staleHost of Array.from(target.container.querySelectorAll('github-video-player'))) {
+    staleHost.remove();
+  }
 
   if (target.type === 'blob') {
     polishGitHubBlobPage(document, target.container);
@@ -55,13 +59,13 @@ export async function mountTargetWithShadowUi(
     },
   });
 
-  if (!target.container.isConnected) {
+  if (!target.container.isConnected || ctx.isInvalid) {
     target.container.removeAttribute(MOUNTED_ATTR);
     return;
   }
 
   ui.mount();
-  markMounted(target.container);
+  markMounted(target.container, target.rawUrl);
 
   // 非同期のマウント待機中に挿入されたテキストや翻訳要素を再度除去する
   if (target.type === 'diff') {

@@ -25,9 +25,8 @@ export function detectBlobTargets(
     doc.querySelector<HTMLElement>(selector),
   ).find((el): el is HTMLElement => el !== null);
 
-  if (!isUnmounted(container)) return [];
-
   const rawUrl = findRawUrlInElement(doc, blobInfo.rawUrl, origin) ?? blobInfo.rawUrl;
+  if (!isUnmounted(container, rawUrl)) return [];
 
   return [
     {
