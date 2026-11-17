@@ -760,8 +760,8 @@ describe('VideoFrame', () => {
           {
             type: 'ghvp:range-request',
             requestId: 'r1',
-            start: 0,
-            end: 3,
+            start: 10,
+            end: 13,
           },
           [],
         );
@@ -1153,6 +1153,63 @@ describe('VideoFrame', () => {
       } else {
         Reflect.deleteProperty(navigator, 'serviceWorker');
       }
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('pauses iframe playback when hidden becomes true', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(sampleBytes, { status: 200 }));
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const [hidden, setHidden] = createSignal(false);
+      const { getByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/pause-on-hide.mp4"
+          hidden={hidden()}
+          testId="video-pause-on-hide"
+        />
+      ));
+
+      const iframe = getByTestId('video-pause-on-hide') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+      const postMessageSpy = vi.fn<(message: unknown, targetOrigin: string) => void>();
+      Object.defineProperty(iframe, 'contentWindow', {
+        value: { postMessage: postMessageSpy },
+        configurable: true,
+      });
+
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:frame-ready', frameId },
+        }),
+      );
+
+      await waitFor(() => {
+        expect(postMessageSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'ghvp:load-video', frameId }),
+          extensionOrigin,
+        );
+      });
+
+      setHidden(true);
+      flush();
+
+      expect(postMessageSpy).toHaveBeenCalledWith({ type: 'ghvp:pause', frameId }, extensionOrigin);
+    } finally {
+      fetchSpy.mockRestore();
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });

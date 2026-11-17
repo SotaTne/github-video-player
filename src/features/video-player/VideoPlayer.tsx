@@ -23,6 +23,10 @@ export interface VideoPlayerProps {
 export function VideoPlayer(props: VideoPlayerProps) {
   const [viewMode, setViewMode] = createSignal<DiffViewMode>('after');
   const [beforeAvailable, setBeforeAvailable] = createSignal(Boolean(props.beforeRawUrl));
+  const [shouldProbeBefore, setShouldProbeBefore] = createSignal(
+    props.mode !== 'diff' || typeof IntersectionObserver === 'undefined',
+  );
+  let articleRef: HTMLElement | undefined;
 
   // タブ往復時に同一動画を再 fetch しないよう、プレイヤー単位で取得済み Blob を保持する
   const blobCache = new Map<string, Blob>();
@@ -35,12 +39,42 @@ export function VideoPlayer(props: VideoPlayerProps) {
   const isDiffMode = () => props.mode === 'diff';
   const isAfterHidden = () => viewMode() === 'before' && canCompare();
 
+  // Diff で大量動画があるとき、画面外の動画に対して不要な before HEAD を一斉送信しない
+  createEffect(
+    () => ({
+      hasBefore: Boolean(props.beforeRawUrl),
+      diff: isDiffMode(),
+      ready: shouldProbeBefore(),
+    }),
+    ({ hasBefore, diff, ready }) => {
+      if (!hasBefore || ready) return;
+      if (!diff || typeof IntersectionObserver === 'undefined') {
+        setShouldProbeBefore(true);
+        return;
+      }
+      const target = articleRef;
+      if (!target) return;
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) {
+            setShouldProbeBefore(true);
+            observer.disconnect();
+          }
+        },
+        { rootMargin: '400px' },
+      );
+      observer.observe(target);
+      return () => observer.disconnect();
+    },
+  );
+
   // DOM 判定をすり抜けて存在しない beforeRawUrl が渡された場合も、クリック前に比較ボタンを引っ込める
   createEffect(
-    () => props.beforeRawUrl,
+    () => (shouldProbeBefore() ? props.beforeRawUrl : undefined),
     (beforeUrl) => {
       if (!beforeUrl) {
-        setBeforeAvailable(false);
+        if (!props.beforeRawUrl) setBeforeAvailable(false);
         return;
       }
       setBeforeAvailable(true);
@@ -65,6 +99,9 @@ export function VideoPlayer(props: VideoPlayerProps) {
 
   return (
     <article
+      ref={(el) => {
+        articleRef = el;
+      }}
       data-testid="ghvp-player"
       aria-label={props.filePath}
       class={`@container w-full text-gh-fg font-sans text-sm flex flex-col gap-3 ${

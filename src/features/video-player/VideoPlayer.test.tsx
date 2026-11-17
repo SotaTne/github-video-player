@@ -193,10 +193,27 @@ describe('VideoPlayer', () => {
     }
   });
 
-  it('hides comparison controls proactively when beforeRawUrl returns 404 on HEAD and keeps plain diff background', async () => {
+  it('defers beforeRawUrl HEAD probe until near viewport and hides controls on 404 without plain diff canvas regression', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(new Response(null, { status: 404 }));
+
+    let probeCallback: IntersectionObserverCallback | undefined;
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          probeCallback = callback;
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
 
     try {
       const { getByTestId, queryByRole } = render(() => (
@@ -209,12 +226,20 @@ describe('VideoPlayer', () => {
       ));
 
       expect(getByTestId('ghvp-player').classList.contains('ghvp-diff-canvas')).toBe(false);
+      await Promise.resolve();
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      probeCallback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
 
       await waitFor(() => {
         expect(queryByRole('group', { name: '動画の比較表示モード' })).toBeNull();
       });
     } finally {
       fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
     }
   });
 });

@@ -211,6 +211,16 @@ window.addEventListener('message', (event) => {
     return;
   }
 
+  if (
+    event.data &&
+    typeof event.data === 'object' &&
+    (event.data as Record<string, unknown>)['type'] === 'ghvp:pause' &&
+    (event.data as Record<string, unknown>)['frameId'] === frameId
+  ) {
+    player.pause();
+    return;
+  }
+
   if (!isLoadVideoMessage(event.data)) return;
 
   if (event.data.blob.size === 0) {
