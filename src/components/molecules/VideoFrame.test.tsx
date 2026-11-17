@@ -848,4 +848,78 @@ describe('VideoFrame', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('keeps error fallback mounted across offscreen scroll without re-fetching', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 404 }));
+
+    const callbacksByMargin = new Map<string, IntersectionObserverCallback>();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          callbacksByMargin.set(options?.rootMargin ?? '', callback);
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId, queryByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/develop/missing.mp4"
+          lazy
+          testId="video-error-persist"
+        />
+      ));
+
+      callbacksByMargin.get('200px')?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      await waitFor(() => {
+        expect(getByTestId('ghvp-error')).toBeTruthy();
+      });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // 画面外へ大きくスクロールして戻ってきてもエラー表示のまま再取得しないこと
+      callbacksByMargin.get('1500px')?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+      callbacksByMargin.get('200px')?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+      await Promise.resolve();
+
+      expect(getByTestId('ghvp-error')).toBeTruthy();
+      expect(queryByTestId('video-error-persist')).toBeNull();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
 });
