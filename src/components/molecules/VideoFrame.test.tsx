@@ -922,4 +922,84 @@ describe('VideoFrame', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('keeps offscreen lazy iframe mounted after user played and paused the video', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(sampleBytes, { status: 200 }));
+
+    const callbacksByMargin = new Map<string, IntersectionObserverCallback>();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          callbacksByMargin.set(options?.rootMargin ?? '', callback);
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      const { getByTestId, queryByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/develop/paused-midway.mp4"
+          lazy
+          testId="video-paused-midway"
+        />
+      ));
+
+      callbacksByMargin.get('200px')?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      const iframe = getByTestId('video-paused-midway') as HTMLIFrameElement;
+      const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+
+      // 再生開始したあと一時停止する
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:playback-state', frameId, playing: true, currentTime: 5.2 },
+        }),
+      );
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          origin: extensionOrigin,
+          data: { type: 'ghvp:playback-state', frameId, playing: false, currentTime: 5.2 },
+        }),
+      );
+
+      // 遠方へスクロールしても再生位置が失われないようアンロードしないこと
+      callbacksByMargin.get('1500px')?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      expect(getByTestId('video-paused-midway')).toBeTruthy();
+      expect(queryByTestId('ghvp-placeholder')).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
 });
