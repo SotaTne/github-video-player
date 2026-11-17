@@ -113,6 +113,16 @@ describe('VideoFrame', () => {
         />
       ));
 
+      // 交差前は iframe 自体も生成せずプレースホルダーのみ表示する
+      expect(queryByTestId('video-iframe')).toBeNull();
+      expect(getByTestId('ghvp-placeholder')).toBeTruthy();
+
+      observerCallback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
       const iframe = getByTestId('video-iframe') as HTMLIFrameElement;
       expect(iframe.tagName).toBe('IFRAME');
       expect(iframe.hasAttribute('loading')).toBe(false);
@@ -125,11 +135,6 @@ describe('VideoFrame', () => {
         value: { postMessage: postMessageSpy },
         configurable: true,
       });
-
-      observerCallback?.(
-        [{ isIntersecting: true } as IntersectionObserverEntry],
-        {} as IntersectionObserver,
-      );
 
       await waitFor(() => {
         expect(fetchSpy).toHaveBeenCalledWith(
@@ -442,6 +447,57 @@ describe('VideoFrame', () => {
       });
       expect(postMessageSpy).not.toHaveBeenCalled();
     } finally {
+      fetchSpy.mockRestore();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+
+  it('limits concurrent video fetches when many videos mount at once', async () => {
+    const extensionOrigin = 'chrome-extension://test-extension-id';
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const sampleBytes = new Uint8Array([1, 2, 3, 4]).buffer;
+
+    const resolvers: Array<() => void> = [];
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvers.push(() => resolve(new Response(sampleBytes.slice(0), { status: 200 })));
+        }),
+    );
+
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-extension-id',
+        getURL: (path: string) => `${extensionOrigin}${path}`,
+      },
+    };
+
+    try {
+      render(() => (
+        <div>
+          <VideoFrame src="https://github.com/octocat/hello/raw/main/v1.mp4" />
+          <VideoFrame src="https://github.com/octocat/hello/raw/main/v2.mp4" />
+          <VideoFrame src="https://github.com/octocat/hello/raw/main/v3.mp4" />
+          <VideoFrame src="https://github.com/octocat/hello/raw/main/v4.mp4" />
+        </div>
+      ));
+
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledTimes(3);
+      });
+      // 3本がインフライトのあいだは4本目は待機する
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+
+      // 1本完了すると4本目が開始される
+      resolvers.shift()?.();
+      await waitFor(() => {
+        expect(fetchSpy).toHaveBeenCalledTimes(4);
+      });
+    } finally {
+      while (resolvers.length > 0) {
+        resolvers.shift()?.();
+      }
       fetchSpy.mockRestore();
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }

@@ -43,6 +43,41 @@ function resolveOrigin(urlStr: string): string {
   return parsed.origin !== 'null' ? parsed.origin : `${parsed.protocol}//${parsed.host}`;
 }
 
+const MAX_CONCURRENT_VIDEO_FETCHES = 3;
+let activeVideoFetches = 0;
+const pendingFetchQueue: Array<() => void> = [];
+
+function releaseFetchSlot(): void {
+  activeVideoFetches = Math.max(0, activeVideoFetches - 1);
+  const next = pendingFetchQueue.shift();
+  next?.();
+}
+
+async function acquireFetchSlot(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+  if (activeVideoFetches < MAX_CONCURRENT_VIDEO_FETCHES) {
+    activeVideoFetches += 1;
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const start = () => {
+      signal.removeEventListener('abort', onAbort);
+      activeVideoFetches += 1;
+      resolve();
+    };
+    const onAbort = () => {
+      const index = pendingFetchQueue.indexOf(start);
+      if (index !== -1) pendingFetchQueue.splice(index, 1);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    pendingFetchQueue.push(start);
+  });
+}
+
 function isValidVideoBlob(blob: Blob): boolean {
   if (blob.size === 0) return false;
   if (!blob.type) return true;
@@ -182,7 +217,11 @@ export function VideoFrame(props: VideoFrameProps) {
       }
 
       void (async () => {
+        let hasSlot = false;
         try {
+          await acquireFetchSlot(controller.signal);
+          hasSlot = true;
+
           const response = await fetch(src, {
             credentials: 'same-origin',
             signal: controller.signal,
@@ -210,6 +249,10 @@ export function VideoFrame(props: VideoFrameProps) {
         } catch (err) {
           if (err instanceof DOMException && err.name === 'AbortError') return;
           handleError();
+        } finally {
+          if (hasSlot) {
+            releaseFetchSlot();
+          }
         }
       })();
 
@@ -279,24 +322,35 @@ export function VideoFrame(props: VideoFrameProps) {
           }
         >
           {(frameSrc) => (
-            <iframe
-              ref={(el) => {
-                if (iframeRef !== el) {
-                  iframeRef = el;
-                  isFrameReady = false;
-                }
-              }}
-              data-testid={props.testId}
-              src={frameSrc()}
-              title="動画プレイヤー"
-              allow="fullscreen"
-              style={{
-                '--ghvp-aspect': metadata()
-                  ? `${metadata()!.width} / ${metadata()!.height}`
-                  : '16 / 9',
-              }}
-              class="ghvp-media-box w-full max-h-[520px] border-0 rounded bg-black"
-            />
+            <Show
+              when={shouldLoad()}
+              fallback={
+                <div
+                  data-testid="ghvp-placeholder"
+                  style={{ '--ghvp-aspect': '16 / 9' }}
+                  class="ghvp-media-box w-full max-h-[520px] rounded bg-black"
+                />
+              }
+            >
+              <iframe
+                ref={(el) => {
+                  if (iframeRef !== el) {
+                    iframeRef = el;
+                    isFrameReady = false;
+                  }
+                }}
+                data-testid={props.testId}
+                src={frameSrc()}
+                title="動画プレイヤー"
+                allow="fullscreen"
+                style={{
+                  '--ghvp-aspect': metadata()
+                    ? `${metadata()!.width} / ${metadata()!.height}`
+                    : '16 / 9',
+                }}
+                class="ghvp-media-box w-full max-h-[520px] border-0 rounded bg-black"
+              />
+            </Show>
           )}
         </Show>
       </Show>
