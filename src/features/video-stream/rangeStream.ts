@@ -1,5 +1,43 @@
 export const STREAM_PATH_PREFIX = '/ghvp-stream/';
 export const DEFAULT_STREAM_CHUNK_BYTES = 1024 * 1024;
+export const DEFAULT_STREAM_KEEPALIVE_MS = 20_000;
+
+/**
+ * HTTP Content-Range ヘッダからファイル全体のバイトサイズを抽出する。
+ */
+export function parseContentRangeTotalSize(contentRangeHeader: string | null): number | null {
+  if (!contentRangeHeader) return null;
+  const match = contentRangeHeader.trim().match(/^bytes\s+\d+-\d+\/(\d+)$/i);
+  if (!match?.[1]) return null;
+  const totalSize = Number(match[1]);
+  return Number.isSafeInteger(totalSize) && totalSize > 0 ? totalSize : null;
+}
+
+/**
+ * MV3 Service Worker がアイドル停止してストリームセッションが消えないよう、定期的に keepalive を送る。
+ */
+export function startStreamKeepalive(
+  streamId: string,
+  getWorker: () => Promise<{
+    postMessage: (message: unknown, transfer: Transferable[]) => void;
+  } | null>,
+  intervalMs = DEFAULT_STREAM_KEEPALIVE_MS,
+): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped) return;
+    void getWorker().then((sw) => {
+      if (!stopped && sw) {
+        sw.postMessage({ type: 'ghvp:keepalive-stream', streamId }, []);
+      }
+    });
+  }, intervalMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
 
 export interface ByteRange {
   start: number;
