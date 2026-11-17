@@ -192,4 +192,29 @@ describe('VideoPlayer', () => {
       (globalThis as { chrome?: unknown }).chrome = originalChrome;
     }
   });
+
+  it('hides comparison controls proactively when beforeRawUrl returns 404 on HEAD and keeps plain diff background', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 404 }));
+
+    try {
+      const { getByTestId, queryByRole } = render(() => (
+        <VideoPlayer
+          filePath="assets/added.webm"
+          rawUrl="https://github.com/octocat/hello/raw/head/assets/added.webm"
+          beforeRawUrl="https://github.com/octocat/hello/raw/base/assets/added.webm"
+          mode="diff"
+        />
+      ));
+
+      expect(getByTestId('ghvp-player').classList.contains('ghvp-diff-canvas')).toBe(false);
+
+      await waitFor(() => {
+        expect(queryByRole('group', { name: '動画の比較表示モード' })).toBeNull();
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
 });

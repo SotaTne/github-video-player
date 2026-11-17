@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, Show } from 'solid-js';
+import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import { SegmentedControl, type SegmentOption } from '../../components/molecules/SegmentedControl';
 import { VideoFrame } from '../../components/molecules/VideoFrame';
 
@@ -35,12 +35,40 @@ export function VideoPlayer(props: VideoPlayerProps) {
   const isDiffMode = () => props.mode === 'diff';
   const isAfterHidden = () => viewMode() === 'before' && canCompare();
 
+  // DOM 判定をすり抜けて存在しない beforeRawUrl が渡された場合も、クリック前に比較ボタンを引っ込める
+  createEffect(
+    () => props.beforeRawUrl,
+    (beforeUrl) => {
+      if (!beforeUrl) {
+        setBeforeAvailable(false);
+        return;
+      }
+      setBeforeAvailable(true);
+      const controller = new AbortController();
+      void fetch(beforeUrl, {
+        method: 'HEAD',
+        credentials: 'same-origin',
+        signal: controller.signal,
+      })
+        .then((res) => {
+          if (!controller.signal.aborted && !res.ok) {
+            setBeforeAvailable(false);
+            if (viewMode() !== 'after') setViewMode('after');
+          }
+        })
+        .catch(() => {
+          // テスト環境や一時的な通信エラー時はフォールバック判定へ委ねる
+        });
+      return () => controller.abort();
+    },
+  );
+
   return (
     <article
       data-testid="ghvp-player"
       aria-label={props.filePath}
       class={`@container w-full text-gh-fg font-sans text-sm flex flex-col gap-3 ${
-        isDiffMode() ? 'ghvp-diff-canvas p-4 rounded-b-md' : ''
+        isDiffMode() ? 'p-4' : ''
       }`}
     >
       <div

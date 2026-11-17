@@ -91,6 +91,27 @@ function resolveDiffContentArea(fileEl: HTMLElement): HTMLElement | null {
   return contentArea;
 }
 
+function isAddedDiffFile(fileEl: HTMLElement): boolean {
+  if (fileEl.getAttribute('data-file-type') === 'added') return true;
+  if (
+    fileEl.querySelector(
+      '[title="added" i], [aria-label*="added" i], [data-file-type="added"], [data-diff-status="added"], .octicon-file-added, .octicon-diff-added',
+    )
+  ) {
+    return true;
+  }
+
+  const headerRoot =
+    fileEl.querySelector<HTMLElement>('[data-diff-header-wrapper], .file-header') ?? fileEl;
+  const hasSuccess = Boolean(
+    headerRoot.querySelector('.fgColor-success, [class*="diffstat-block-added"]'),
+  );
+  const hasDanger = Boolean(
+    headerRoot.querySelector('.fgColor-danger, [class*="diffstat-block-deleted"]'),
+  );
+  return hasSuccess && !hasDanger;
+}
+
 function resolveDiffRawUrls(
   fileEl: HTMLElement,
   filePath: string,
@@ -113,11 +134,7 @@ function resolveDiffRawUrls(
 
   if (!rawUrl) return null;
 
-  const isAdded =
-    fileEl.getAttribute('data-file-type') === 'added' ||
-    Boolean(fileEl.querySelector('[title="added"], .octicon-file-added, .octicon-diff-added')) ||
-    (Boolean(fileEl.querySelector('code.fgColor-success')) &&
-      !fileEl.querySelector('code.fgColor-danger'));
+  const isAdded = isAddedDiffFile(fileEl);
 
   let beforeRawUrl: string | undefined;
   if (!isAdded && owner && repo && baseSha && headSha && baseSha !== headSha) {
