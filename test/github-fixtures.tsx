@@ -64,6 +64,7 @@ export function createGitHubBlobDom(options: GitHubBlobFixtureOptions): string {
   const filePath = escapeHtml(options.filePath);
   const variant = options.variant ?? 'react';
   const mountedAttr = options.mounted ? ` ${MOUNTED_ATTR}="true"` : '';
+  const mountedHost = options.mounted ? '<github-video-player></github-video-player>' : '';
   const rawHref = `https://github.com/${owner}/${repo}/raw/${ref}/${filePath}`;
 
   if (variant === 'classic') {
@@ -73,6 +74,7 @@ export function createGitHubBlobDom(options: GitHubBlobFixtureOptions): string {
           <a id="raw-url" href="/${owner}/${repo}/raw/${ref}/${filePath}">Raw</a>
         </div>
         <div class="Box-body blob-wrapper"${mountedAttr}>
+          ${mountedHost}
           <div class="text-center p-4">Binary file not shown.</div>
         </div>
       </div>
@@ -109,6 +111,7 @@ export function createGitHubBlobDom(options: GitHubBlobFixtureOptions): string {
               class="Box-sc-g0xbh4-0 tooLargeError-module_V1eN3_tooLargeError"
               data-testid="file-size-too-large"${mountedAttr}
             >
+              ${mountedHost}
               <h2 class="tooLargeError-module_V1eN3_heading">
                 Sorry about that, but we can’t show files that are this big right now.
               </h2>
@@ -171,6 +174,7 @@ export function createGitHubPrDiffDom(options: GitHubPrDiffFixtureOptions): stri
         const path = escapeHtml(file.path);
         const status = file.status ?? 'modified';
         const mountedAttr = file.mounted ? ` ${MOUNTED_ATTR}="true"` : '';
+        const mountedHost = file.mounted ? '<github-video-player></github-video-player>' : '';
         const { fileTypeAttr, badgeHtml } = renderStatusAttributes(status);
         const targetSha =
           status === 'deleted' && options.baseSha ? escapeHtml(options.baseSha) : headSha;
@@ -182,6 +186,7 @@ export function createGitHubPrDiffDom(options: GitHubPrDiffFixtureOptions): stri
               <a href="/${owner}/${repo}/blob/${targetSha}/${path}">${path}</a>
             </div>
             <div class="js-file-content"${mountedAttr}>
+              ${mountedHost}
               <a href="/${owner}/${repo}/blob/${targetSha}/${path}?raw=true">View raw</a>
             </div>
           </div>
@@ -207,6 +212,7 @@ export function createGitHubPrDiffDom(options: GitHubPrDiffFixtureOptions): stri
       const path = escapeHtml(file.path);
       const status = file.status ?? 'modified';
       const mountedAttr = file.mounted ? ` ${MOUNTED_ATTR}="true"` : '';
+      const mountedHost = file.mounted ? '<github-video-player></github-video-player>' : '';
       const anchorId = toDiffAnchorId(index);
       const targetSha =
         status === 'deleted' && options.baseSha ? escapeHtml(options.baseSha) : headSha;
@@ -236,7 +242,7 @@ export function createGitHubPrDiffDom(options: GitHubPrDiffFixtureOptions): stri
             </div>
           </div>
           <div class="border position-relative rounded-bottom-2">
-            <div class="fgColor-muted p-2" data-diff-anchor="${anchorId}"${mountedAttr}>Binary file not shown.</div>
+            <div class="fgColor-muted p-2" data-diff-anchor="${anchorId}"${mountedAttr}>${mountedHost}Binary file not shown.</div>
           </div>
         </div>
       `.trim();

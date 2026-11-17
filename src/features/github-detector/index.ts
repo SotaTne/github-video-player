@@ -21,6 +21,7 @@ export {
   MOUNTED_ATTR,
   isUnmounted,
   markMounted,
+  markMounting,
   polishGitHubBlobPage,
   polishGitHubDiffContainer,
   polishMountedDiffContainers,
