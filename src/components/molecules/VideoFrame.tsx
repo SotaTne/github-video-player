@@ -28,6 +28,13 @@ interface ExtensionRuntimeLike {
 
 let frameCounter = 0;
 
+interface StreamInfo {
+  streamId: string;
+  totalSize: number;
+  contentType: string;
+  cachedFirstChunk?: ArrayBuffer;
+}
+
 function getExtensionFrameUrl(frameId: string): string | null {
   const g = globalThis as {
     browser?: { runtime?: ExtensionRuntimeLike };
@@ -142,22 +149,25 @@ export function VideoFrame(props: VideoFrameProps) {
   let latestBlob: Blob | null = null;
   let lastLoadedSrc: string | null = null;
   let activeStreamPort: MessagePort | null = null;
-  let pendingStreamInfo: {
-    streamId: string;
-    totalSize: number;
-    contentType: string;
-    cachedFirstChunk?: ArrayBuffer;
-  } | null = null;
+  let pendingStreamInfo: StreamInfo | null = null;
   let activeLoadController: AbortController | null = null;
   let activeLoadSrc: string | null = null;
   let hasFallenBackToBlob = false;
+  // iframe が再読み込みされたときに同じ動画のストリームを張り直すため、最後に送った情報を保持する
+  let lastStreamInfo: StreamInfo | null = null;
+  let abortActiveRanges: (() => void) | null = null;
+  let streamSeq = 0;
+  const nextStreamId = () => `${frameId}-${++streamSeq}`;
 
   const cleanupActiveStream = () => {
+    abortActiveRanges?.();
+    abortActiveRanges = null;
     if (activeStreamPort) {
       activeStreamPort.close();
       activeStreamPort = null;
     }
     pendingStreamInfo = null;
+    lastStreamInfo = null;
   };
 
   const handleError = () => {
@@ -185,22 +195,30 @@ export function VideoFrame(props: VideoFrameProps) {
     );
   };
 
-  const postStreamToFrame = (
-    src: string,
-    info: {
-      streamId: string;
-      totalSize: number;
-      contentType: string;
-      cachedFirstChunk?: ArrayBuffer;
-    },
-    signal: AbortSignal,
-  ) => {
+  const postStreamToFrame = (src: string, info: StreamInfo, signal: AbortSignal) => {
     const targetWindow = iframeRef?.contentWindow;
-    if (!targetWindow || !extensionOrigin) return;
+    if (!targetWindow || !extensionOrigin || signal.aborted) return;
 
     cleanupActiveStream();
+    lastStreamInfo = info;
     const channel = new MessageChannel();
     activeStreamPort = channel.port1;
+    const inflight = new Map<string, AbortController>();
+    abortActiveRanges = () => {
+      for (const requestController of inflight.values()) requestController.abort();
+      inflight.clear();
+    };
+
+    const respond = (requestId: string, buffer: ArrayBuffer | null) => {
+      if (buffer) {
+        channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: true, buffer }, [
+          buffer,
+        ]);
+      } else {
+        channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: false });
+      }
+    };
+
     channel.port1.addEventListener('message', (event: MessageEvent) => {
       const req = event.data as {
         type?: string;
@@ -208,38 +226,47 @@ export function VideoFrame(props: VideoFrameProps) {
         start?: number;
         end?: number;
       } | null;
-      if (!req || req.type !== 'ghvp:range-request' || !req.requestId) return;
+      if (!req || !req.requestId) return;
+
+      if (req.type === 'ghvp:range-cancel') {
+        inflight.get(req.requestId)?.abort();
+        inflight.delete(req.requestId);
+        return;
+      }
+      if (req.type !== 'ghvp:range-request') return;
       const { requestId, start = 0, end = 0 } = req;
 
       if (info.cachedFirstChunk && start >= 0 && end < info.cachedFirstChunk.byteLength) {
-        const sliced = info.cachedFirstChunk.slice(start, end + 1);
-        channel.port1.postMessage(
-          { type: 'ghvp:range-response', requestId, ok: true, buffer: sliced },
-          [sliced],
-        );
+        respond(requestId, info.cachedFirstChunk.slice(start, end + 1));
         return;
       }
 
+      const requestController = new AbortController();
+      inflight.set(requestId, requestController);
+
       void (async () => {
         try {
-          const response = await fetch(src, {
-            headers: { Range: `bytes=${start}-${end}` },
-            credentials: 'same-origin',
-            signal,
-          });
-          if (response.status !== 206) {
-            channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: false });
-            return;
+          // 一時的な通信断で SW セッションごと全体 Blob 取得へ落ちないよう、通信エラーと 5xx は 1 回だけ再試行する
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              const response = await fetch(src, {
+                headers: { Range: `bytes=${start}-${end}` },
+                credentials: 'same-origin',
+                signal: requestController.signal,
+              });
+              if (response.status === 206) {
+                const buffer = await response.arrayBuffer();
+                if (!requestController.signal.aborted) respond(requestId, buffer);
+                return;
+              }
+              if (response.status < 500) break;
+            } catch {
+              if (requestController.signal.aborted) return;
+            }
           }
-          const buffer = await response.arrayBuffer();
-          if (signal.aborted) return;
-          channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: true, buffer }, [
-            buffer,
-          ]);
-        } catch {
-          if (!signal.aborted) {
-            channel.port1.postMessage({ type: 'ghvp:range-response', requestId, ok: false });
-          }
+          if (!requestController.signal.aborted) respond(requestId, null);
+        } finally {
+          inflight.delete(requestId);
         }
       })();
     });
@@ -313,12 +340,13 @@ export function VideoFrame(props: VideoFrameProps) {
         if (latestBlob) {
           postVideoToFrame(latestBlob);
         } else if (
-          pendingStreamInfo &&
+          (pendingStreamInfo || lastStreamInfo) &&
           activeLoadSrc &&
           activeLoadController &&
           !activeLoadController.signal.aborted
         ) {
-          const info = pendingStreamInfo;
+          // 再読み込みされた iframe の pagehide による登録解除と衝突しないよう、張り直し時は新しい streamId を使う
+          const info = pendingStreamInfo ?? { ...lastStreamInfo!, streamId: nextStreamId() };
           pendingStreamInfo = null;
           postStreamToFrame(activeLoadSrc, info, activeLoadController.signal);
         }
@@ -381,14 +409,16 @@ export function VideoFrame(props: VideoFrameProps) {
 
   // lazy 時はビューポート付近に入るまで動画 fetch を遅延し、大きく画面外へ離れた停止中動画は解放する
   // エラー表示（Raw ダウンロード導線）へ遷移済みの場合は同じ src で再取得せず状態を維持する
+  // 非表示タブ（display:none）は常に画面外と報告されるため、切り替えの往復で再取得しないよう解放しない
   createEffect(
     () => ({
       lazy: Boolean(props.lazy),
       hasFrame: Boolean(extensionFrameUrl),
       loaded: shouldLoad(),
       errored: hasError(),
+      hidden: Boolean(props.hidden),
     }),
-    ({ lazy, hasFrame, loaded, errored }) => {
+    ({ lazy, hasFrame, loaded, errored, hidden }) => {
       if (!hasFrame || errored) return;
       if (!lazy || typeof IntersectionObserver === 'undefined') {
         if (!loaded) setShouldLoad(true);
@@ -411,10 +441,12 @@ export function VideoFrame(props: VideoFrameProps) {
         return () => enterObserver.disconnect();
       }
 
+      if (hidden) return;
+
       const leaveObserver = new IntersectionObserver(
         (entries) => {
           const isNear = entries.some((entry) => entry.isIntersecting);
-          if (!isNear && !isPlaying && !hasPlayedOrSeeked && !hasError()) {
+          if (!isNear && !props.hidden && !isPlaying && !hasPlayedOrSeeked && !hasError()) {
             latestBlob = null;
             isFrameReady = false;
             iframeRef = undefined;
@@ -542,7 +574,7 @@ export function VideoFrame(props: VideoFrameProps) {
             }
 
             const streamInfo = {
-              streamId: `${frameId}-${Date.now()}`,
+              streamId: nextStreamId(),
               totalSize,
               contentType,
               cachedFirstChunk: firstBuffer,

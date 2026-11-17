@@ -87,8 +87,17 @@ function requestChunkFromPort(
     }
 
     const requestId = `req-${++requestCounter}`;
+    // 待つのをやめた要求は Content Script 側の上流 fetch も止め、シーク時に不要な取得が積み上がらないようにする
+    const cancelUpstream = () => {
+      try {
+        port.postMessage({ type: 'ghvp:range-cancel', requestId });
+      } catch {
+        // ポートが既に閉じている場合は止める対象もない
+      }
+    };
     const timer = setTimeout(() => {
       cleanup();
+      cancelUpstream();
       resolve(null);
     }, 15_000);
 
@@ -105,6 +114,7 @@ function requestChunkFromPort(
 
     const onAbort = () => {
       cleanup();
+      cancelUpstream();
       resolve(null);
     };
 

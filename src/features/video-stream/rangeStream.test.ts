@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createStreamFetchHandler, parseByteRange, type StreamSession } from './rangeStream';
 
 describe('video-stream/rangeStream', () => {
@@ -105,6 +105,44 @@ describe('video-stream/rangeStream', () => {
         );
         expect(res.status).toBe(502);
         expect(sessions.has('stream-fail')).toBe(false);
+      } finally {
+        channel.port1.close();
+        channel.port2.close();
+      }
+    });
+
+    it('tells the content side to cancel an upstream chunk when the media request is aborted', async () => {
+      const channel = new MessageChannel();
+      const received: Array<{ type?: string; requestId?: string }> = [];
+      channel.port1.addEventListener('message', (event) => {
+        received.push(event.data as { type?: string; requestId?: string });
+      });
+      channel.port1.start();
+
+      const sessions = new Map<string, StreamSession>([
+        ['stream-abort', { port: channel.port2, totalSize: 100, contentType: 'video/mp4' }],
+      ]);
+      const controller = new AbortController();
+      const handleFetch = createStreamFetchHandler(sessions);
+      try {
+        const pending = handleFetch(
+          new Request('chrome-extension://test-id/ghvp-stream/stream-abort', {
+            headers: { Range: 'bytes=0-10' },
+            signal: controller.signal,
+          }),
+        );
+        await vi.waitFor(() => expect(received).toHaveLength(1));
+
+        controller.abort();
+        await pending;
+
+        await vi.waitFor(() =>
+          expect(received[1]).toEqual({
+            type: 'ghvp:range-cancel',
+            requestId: received[0]!.requestId,
+          }),
+        );
+        expect(sessions.has('stream-abort')).toBe(true);
       } finally {
         channel.port1.close();
         channel.port2.close();

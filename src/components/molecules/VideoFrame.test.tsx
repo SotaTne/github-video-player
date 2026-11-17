@@ -1214,3 +1214,237 @@ describe('VideoFrame', () => {
     }
   });
 });
+
+const STREAM_ORIGIN = 'chrome-extension://test-extension-id';
+const LATER_RANGE = `bytes=${DEFAULT_STREAM_CHUNK_BYTES}-${DEFAULT_STREAM_CHUNK_BYTES + 3}`;
+
+interface StreamHarness {
+  frameId: string;
+  postMessageSpy: ReturnType<typeof vi.fn>;
+  ports: MessagePort[];
+  fetchSpy: ReturnType<typeof vi.spyOn>;
+  sendFrameReady: () => void;
+  requestRange: (
+    requestId: string,
+    start: number,
+    end: number,
+  ) => Promise<{ ok: boolean; buffer?: ArrayBuffer }>;
+  restore: () => void;
+}
+
+/**
+ * 1MB 以上の動画を SW ストリーミングで初期化した状態を用意する。
+ * laterRange は先頭チャンク以降の Range 取得に対する応答を差し替える。
+ */
+async function setupStreamingFrame(
+  laterRange: (init: RequestInit | undefined) => Promise<Response>,
+): Promise<StreamHarness> {
+  const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+  const originalNavigatorDesc = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
+  Object.defineProperty(navigator, 'serviceWorker', { value: {}, configurable: true });
+
+  const firstChunk = new Uint8Array(DEFAULT_STREAM_CHUNK_BYTES);
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+    if (init?.method === 'HEAD') {
+      return Promise.resolve(
+        new Response(null, {
+          status: 200,
+          headers: {
+            'content-length': String(DEFAULT_STREAM_CHUNK_BYTES * 2),
+            'content-type': 'video/mp4',
+          },
+        }),
+      );
+    }
+    const range = (init?.headers as Record<string, string> | undefined)?.['Range'];
+    if (range === LATER_RANGE) return laterRange(init);
+    return Promise.resolve(new Response(firstChunk.buffer.slice(0), { status: 206 }));
+  });
+
+  (globalThis as { chrome?: unknown }).chrome = {
+    runtime: { id: 'test-extension-id', getURL: (path: string) => `${STREAM_ORIGIN}${path}` },
+  };
+
+  const { getByTestId, unmount } = render(() => (
+    <VideoFrame src="https://github.com/octocat/hello/raw/main/large.mp4" testId="video-stream" />
+  ));
+  const iframe = getByTestId('video-stream') as HTMLIFrameElement;
+  const frameId = new URL(iframe.getAttribute('src') ?? '').searchParams.get('frameId') ?? '';
+
+  const ports: MessagePort[] = [];
+  const postMessageSpy = vi.fn((message: unknown, _origin: string, transfer?: Transferable[]) => {
+    if ((message as { type?: string }).type === 'ghvp:init-stream' && transfer?.[0]) {
+      ports.push(transfer[0] as MessagePort);
+    }
+  });
+  Object.defineProperty(iframe, 'contentWindow', {
+    value: { postMessage: postMessageSpy },
+    configurable: true,
+  });
+
+  const sendFrameReady = () =>
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        origin: STREAM_ORIGIN,
+        data: { type: 'ghvp:frame-ready', frameId },
+      }),
+    );
+  sendFrameReady();
+  await waitFor(() => expect(ports.length).toBe(1));
+
+  const requestRange = (requestId: string, start: number, end: number) =>
+    new Promise<{ ok: boolean; buffer?: ArrayBuffer }>((resolve) => {
+      const port = ports[ports.length - 1]!;
+      port.addEventListener('message', (e) => {
+        const data = e.data as { requestId?: string; ok: boolean; buffer?: ArrayBuffer };
+        if (data.requestId === requestId) resolve(data);
+      });
+      port.start();
+      port.postMessage({ type: 'ghvp:range-request', requestId, start, end });
+    });
+
+  return {
+    frameId,
+    postMessageSpy,
+    ports,
+    fetchSpy,
+    sendFrameReady,
+    requestRange,
+    restore: () => {
+      unmount();
+      fetchSpy.mockRestore();
+      if (originalNavigatorDesc) {
+        Object.defineProperty(navigator, 'serviceWorker', originalNavigatorDesc);
+      } else {
+        Reflect.deleteProperty(navigator, 'serviceWorker');
+      }
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    },
+  };
+}
+
+describe('VideoFrame streaming resilience', () => {
+  it('re-sends stream init with a fresh streamId when the iframe reloads during streaming', async () => {
+    const harness = await setupStreamingFrame(() => new Promise<Response>(() => {}));
+    try {
+      harness.sendFrameReady();
+
+      await waitFor(() => expect(harness.ports.length).toBe(2));
+      const inits = harness.postMessageSpy.mock.calls
+        .map(([message]) => message as { type?: string; streamId?: string })
+        .filter((message) => message.type === 'ghvp:init-stream');
+      expect(inits).toHaveLength(2);
+      expect(inits[1]!.streamId).not.toBe(inits[0]!.streamId);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it('aborts the upstream range fetch when the Service Worker cancels the request', async () => {
+    let upstreamSignal: AbortSignal | undefined;
+    const harness = await setupStreamingFrame((init) => {
+      upstreamSignal = init?.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    });
+    try {
+      void harness.requestRange(
+        'r-cancel',
+        DEFAULT_STREAM_CHUNK_BYTES,
+        DEFAULT_STREAM_CHUNK_BYTES + 3,
+      );
+      await waitFor(() => expect(upstreamSignal).toBeDefined());
+
+      harness.ports[0]!.postMessage({ type: 'ghvp:range-cancel', requestId: 'r-cancel' });
+
+      await waitFor(() => expect(upstreamSignal?.aborted).toBe(true));
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it('retries an upstream range fetch once after a transient network error', async () => {
+    let attempts = 0;
+    const harness = await setupStreamingFrame(() => {
+      attempts += 1;
+      if (attempts === 1) return Promise.reject(new TypeError('network error'));
+      return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4]).buffer, { status: 206 }));
+    });
+    try {
+      const response = await harness.requestRange(
+        'r-retry',
+        DEFAULT_STREAM_CHUNK_BYTES,
+        DEFAULT_STREAM_CHUNK_BYTES + 3,
+      );
+
+      expect(response.ok).toBe(true);
+      expect(response.buffer?.byteLength).toBe(4);
+      expect(attempts).toBe(2);
+    } finally {
+      harness.restore();
+    }
+  });
+
+  it('keeps a hidden lazy iframe loaded even when the observer reports it offscreen', async () => {
+    const originalChrome = (globalThis as { chrome?: unknown }).chrome;
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() =>
+        Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4]).buffer, { status: 200 })),
+      );
+    const callbacksByMargin = new Map<string, IntersectionObserverCallback>();
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          callbacksByMargin.set(options?.rootMargin ?? '', callback);
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+        takeRecords = vi.fn(() => []);
+        root = null;
+        rootMargin = '';
+        thresholds = [];
+      },
+    );
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: { id: 'test-extension-id', getURL: (path: string) => `${STREAM_ORIGIN}${path}` },
+    };
+
+    try {
+      const [hidden, setHidden] = createSignal(false);
+      const { getByTestId } = render(() => (
+        <VideoFrame
+          src="https://github.com/octocat/hello/raw/main/hidden-keep.mp4"
+          lazy
+          hidden={hidden()}
+          testId="video-hidden-keep"
+        />
+      ));
+
+      callbacksByMargin.get('200px')?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+      const iframe = getByTestId('video-hidden-keep');
+
+      // display:none になった非表示タブは IntersectionObserver から常に画面外として報告される
+      setHidden(true);
+      flush();
+      callbacksByMargin.get('1500px')?.(
+        [{ isIntersecting: false } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+      flush();
+
+      expect(getByTestId('video-hidden-keep')).toBe(iframe);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllGlobals();
+      (globalThis as { chrome?: unknown }).chrome = originalChrome;
+    }
+  });
+});

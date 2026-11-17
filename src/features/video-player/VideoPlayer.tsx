@@ -39,6 +39,13 @@ export function VideoPlayer(props: VideoPlayerProps) {
   const isDiffMode = () => props.mode === 'diff';
   const isAfterHidden = () => viewMode() === 'before' && canCompare();
 
+  // 一度表示した Before は After へ戻しても破棄せず隠すだけにし、切り替えのたびに iframe と先頭チャンクを取り直さない
+  const [hasShownBefore, setHasShownBefore] = createSignal(false);
+  const changeViewMode = (mode: DiffViewMode) => {
+    if (mode !== 'after') setHasShownBefore(true);
+    setViewMode(mode);
+  };
+
   // Diff で大量動画があるとき、画面外の動画に対して不要な before HEAD を一斉送信しない
   createEffect(
     () => ({
@@ -115,12 +122,13 @@ export function VideoPlayer(props: VideoPlayerProps) {
             : 'w-full flex justify-center'
         }
       >
-        <Show when={canCompare() && (viewMode() === 'before' || isTwoSide())}>
+        <Show when={canCompare() && hasShownBefore()}>
           <VideoFrame
             src={props.beforeRawUrl!}
             label={isTwoSide() ? 'Before' : undefined}
             labelVariant="danger"
             lazy={isDiffMode()}
+            hidden={viewMode() === 'after'}
             testId="ghvp-video-before"
             initialBlob={blobCache.get(props.beforeRawUrl!)}
             onBlobLoaded={(blob) => blobCache.set(props.beforeRawUrl!, blob)}
@@ -148,7 +156,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
           <SegmentedControl
             options={DIFF_VIEW_OPTIONS}
             value={viewMode()}
-            onChange={setViewMode}
+            onChange={changeViewMode}
             ariaLabel="動画の比較表示モード"
           />
         </div>
